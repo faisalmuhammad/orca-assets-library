@@ -1,0 +1,1 @@
+export default {testDir:'./checks',timeout:30000,workers:1,use:{channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',baseURL:'http://127.0.0.1:4179',viewport:{width:360,height:900}},webServer:{command:'node scripts/test-server.mjs',url:'http://127.0.0.1:4179',reuseExistingServer:!process.env.CI},reporter:'list'};

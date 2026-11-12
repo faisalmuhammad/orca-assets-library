@@ -1,0 +1,35 @@
+{
+  "name": "orca-assets-library",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/tests/*.test.ts",
+    "test:browser": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build && npm run test:browser && npm run test:release && npm run release:check && orca plugin check dist/plugin --json",
+    "validate": "orca plugin validate dist/plugin --json",
+    "release:prepare": "node scripts/prepare-release.mjs",
+    "release:art": "node --import tsx scripts/release-art.mjs",
+    "release:check": "node scripts/ci-release.mjs && node scripts/check-release.mjs",
+    "release:export": "npm run build && npm run release:check && node scripts/export-release.mjs",
+    "test:release": "node --test tests/release/*.test.mjs"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.12.0",
+    "image-size": "2.1.0",
+    "marked": "15.0.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "22.20.5",
+    "esbuild": "0.25.12",
+    "sharp": "0.35.5",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

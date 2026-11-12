@@ -1,0 +1,2 @@
+import http from 'node:http';import { readFile } from 'node:fs/promises';import path from 'node:path';
+http.createServer(async(req,res)=>{try{const pathname=new URL(req.url,'http://localhost').pathname,file=path.resolve('dist/ui','.'+(pathname==='/'?'/index.html':pathname));if(!file.startsWith(path.resolve('dist/ui')+path.sep))throw Error();res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(await readFile(file));}catch{res.writeHead(404);res.end();}}).listen(4179,'127.0.0.1');

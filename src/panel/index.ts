@@ -1,0 +1,84 @@
+import type {} from 'orca/frame';
+import '../shared/protocol';
+import type { AssetRecord,DiscoverySettings,Filter,LibraryContext,Preview,Query,Sort } from '../shared/types';
+import { el,button,iconButton,icon,select } from './components/dom';
+import { AssetGrid } from './components/AssetGrid';
+import { inspector } from './components/AssetInspector';
+import { browserThumbnail } from './components/BrowserThumbnail';
+import { scrollFrame } from './components/ScrollFrame';
+import { projectBadge } from './components/ProjectBadge';
+declare const LIBRARY_PLUGIN_VERSION:string;
+declare const LIBRARY_PLUGIN_ICON:string;
+const app=document.querySelector<HTMLElement>('#app')!;
+const scope='worktree' as const;
+const mode='generated' as const;
+let refreshing=false;
+let assetTotal:number|undefined;
+let context:LibraryContext|undefined,filter:Filter='all',sort:Sort='newest',search='',view='gallery',selection:AssetRecord|undefined,detail:ReturnType<typeof inspector>|undefined,queryTimer:ReturnType<typeof setTimeout>|undefined,updateTimer:ReturnType<typeof setTimeout>|undefined,toastTimer:ReturnType<typeof setTimeout>|undefined;
+let galleryLayout:'cards'|'list'='cards',activeWorkspaceKey='';
+const savedScroll=new Map<string,number>();
+const scrollKey=()=>String(context?.active?.id??'none')+':'+mode;
+const top=el('header','','topbar'),brand=el('div','','brand'),toolbar=el('div','','toolbar'),brandIcon=el('img');brandIcon.src=LIBRARY_PLUGIN_ICON;brandIcon.alt='';brand.append(brandIcon,el('h1','Assets Library'));top.append(brand,toolbar,el('p','Generated assets by agents in the worktree.','header-subtitle note'));
+const controls=el('div','','controls'),worktreeContext=el('div','','worktree-context');worktreeContext.setAttribute('aria-label','Current worktree');
+const scroller=el('main');scroller.id='scroller';const searchRow=el('div','','search-row'),count=el('span','Loading assets…','asset-count micro'),footer=el('footer','','footer');
+const assetsFrame=scrollFrame(scroller,'assets-scroll-frame');window.addEventListener('pagehide',()=>assetsFrame.dispose(),{once:true});
+const toast=el('div');toast.id='toast';toast.hidden=true;toast.setAttribute('role','status');toast.setAttribute('aria-live','polite');app.append(top,controls,searchRow,assetsFrame.element,footer,toast);
+function report(e:unknown){const text=e instanceof Error?e.message:String(e);toast.textContent=text;toast.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.hidden=true,4500);}
+async function perform(work:()=>Promise<unknown>){try{await work();}catch(e){report(e);}}
+function query():Query{return {scope,mode,filter,sort,search};}
+function isRefreshing(){return refreshing||!!context?.refreshing||context?.collectionProgress?.status==='running';}
+function drawAssetCount(){count.textContent=isRefreshing()?'Refreshing':assetTotal===undefined?'Loading assets…':assetTotal+' '+(assetTotal===1?'asset':'assets');}
+async function savePrefs(){await orca.storage.set('panel.preferences.v1',{scope,mode,filter,filterVersion:2,sort,galleryLayout});}
+async function copy(text:string){try{await navigator.clipboard.writeText(text);}catch{const area=el('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.append(area);area.select();if(!document.execCommand('copy')){area.remove();throw new Error('Clipboard unavailable');}area.remove();}report('Copied to clipboard');}
+const open=(a:AssetRecord)=>void perform(async()=>{const result=await orca.plugin.request('library.action',{id:a.id,action:'open'});if(result.message)report(result.message);});
+async function loadOriginal(a:AssetRecord):Promise<string>{const chunks:Uint8Array[]=[];let offset=0,total=0,mime=a.mimeType,contentHash=a.contentHash;do{const result=await orca.plugin.request('library.preview',{id:a.id,offset,contentHash});if(result.error||!result.data)throw new Error(result.error??'Original unavailable');if(result.contentHash!==contentHash)throw new Error('Asset changed while loading');mime=result.mimeType;total=result.totalBytes??0;if(!Number.isInteger(total)||total<1||total>16*1024*1024)throw new Error('Original exceeds preview limit');const raw=atob(result.data),bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));chunks.push(bytes);offset+=bytes.length;if(!bytes.length||offset>total)throw new Error('Incomplete preview');}while(offset<total);return URL.createObjectURL(new Blob(chunks as BlobPart[],{type:mime}));}
+// Limit parallel thumbnail requests and decoded memory; the grid keeps only visible cards.
+let thumbActive=0;const thumbQueue:(()=>Promise<void>)[]=[];const thumbnailCache=new Map<string,string>();
+function pump(){while(thumbActive<2&&thumbQueue.length){const task=thumbQueue.shift()!;thumbActive++;void task().finally(()=>{thumbActive--;pump();});}}
+function thumbnail(a:AssetRecord,img:HTMLImageElement,placeholder:HTMLElement){const cached=thumbnailCache.get(a.contentHash);const unavailable=()=>{if(a.mimeType.startsWith('video/'))placeholder.title='Video preview unavailable in this browser';else placeholder.textContent='Preview unavailable';};const show=(data:string)=>{if(!img.isConnected)return;img.onload=()=>{img.hidden=false;placeholder.hidden=true;};img.onerror=unavailable;img.src=data;};if(cached){requestAnimationFrame(()=>show(cached));return;}thumbQueue.push(async()=>{if(!img.isConnected)return;try{const data=await browserThumbnail(a,loadOriginal);thumbnailCache.set(a.contentHash,data);if(thumbnailCache.size>160)thumbnailCache.delete(thumbnailCache.keys().next().value!);show(data);}catch{unavailable();}});requestAnimationFrame(pump);}
+const grid=new AssetGrid(scroller,query,q=>orca.plugin.request('library.list',q),showInspector,open,thumbnail,n=>{assetTotal=n;drawAssetCount();if(view==='gallery'){empty.hidden=n>0;grid.element.hidden=n===0;}},report);
+const viewSwitcher=el('div','','view-switcher');viewSwitcher.setAttribute('role','group');viewSwitcher.setAttribute('aria-label','Gallery view');
+for(const [value,label,glyph]of [['cards','Cards view','grid'],['list','List view','list']] as const){const b=iconButton(label,glyph,()=>{galleryLayout=value;grid.setLayout(value);updateViewButtons();void perform(savePrefs);});b.dataset.layout=value;viewSwitcher.append(b);}
+function updateViewButtons(){for(const b of viewSwitcher.querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.layout===galleryLayout));}
+const searchField=el('div','','search-field'),searchInput=el('input','','header-search');searchInput.type='search';searchInput.id='asset-search';searchInput.placeholder='Search assets';searchInput.setAttribute('aria-label','Search assets');count.setAttribute('role','status');count.setAttribute('aria-atomic','true');
+searchInput.oninput=()=>{search=searchInput.value;clearTimeout(queryTimer);queryTimer=setTimeout(()=>void perform(async()=>{await reload();drawControls();}),120);};
+const galleryTools=el('div','','gallery-tools'),sortControl=select('Sort assets',[['newest','Newest first'],['oldest','Oldest first'],['filename','Filename'],['size','File size']],sort,v=>{sort=v as Sort;void perform(async()=>{await savePrefs();await reload();});});
+searchField.append(icon('search'),searchInput);galleryTools.append(viewSwitcher,sortControl);searchRow.append(searchField,galleryTools);
+function drawSearchHeader(){if(searchInput.value!==search)searchInput.value=search;sortControl.value=sort;updateViewButtons();}
+function clearSearch(){search='';clearTimeout(queryTimer);drawControls();void perform(()=>reload());}
+const empty=el('div','','empty'),emptySymbol=el('div','','empty-symbol'),emptyTitle=el('h2','Nothing generated yet'),emptyDescription=el('p','Images, videos, Markdown and HTML created by your agents will appear here automatically.','muted');emptySymbol.append(icon('layers'));const emptyRefresh=button('Check for generated assets',()=>void perform(refreshGenerated),'secondary','refresh');empty.append(emptySymbol,emptyTitle,emptyDescription,emptyRefresh);
+const loading=el('div','','loading-grid');for(let i=0;i<6;i++)loading.append(el('div','','skeleton'));
+async function reload(preserve=false){if(view!=='gallery')return;await grid.reload(preserve);loading.remove();}
+const refreshButton=iconButton('Refresh generated assets','refresh',()=>void perform(refreshGenerated));refreshButton.classList.add('refresh-assets');
+const refreshGlyph=refreshButton.querySelector('svg')!,refreshLoader=icon('loader');refreshLoader.classList.add('refresh-loader');refreshLoader.setAttribute('hidden','');refreshButton.prepend(refreshLoader);
+async function refreshGenerated(){
+  if(isRefreshing())return;if(!context?.active?.root){report(context?.reason??'Open a local worktree first');return;}
+  refreshing=true;drawControls();
+  try{await orca.plugin.request('library.refresh');await refreshContext();await reload(true);}
+  finally{refreshing=false;drawControls();}
+}
+function drawControls(){const oldFilters=controls.querySelector<HTMLElement>('.filters'),filterScroll=oldFilters?.scrollLeft??0,restoreFilterFocus=!!oldFilters?.contains(document.activeElement);controls.replaceChildren();const badge=projectBadge(context?.active?.projectAppearance);worktreeContext.replaceChildren(...(badge?[badge]:[]),el('span',context?.active?.name??'No active worktree','worktree-name'));worktreeContext.title=context?.active?.path??'';
+  const filterRow=el('div','','filters');filterRow.setAttribute('role','group');filterRow.setAttribute('aria-label','Asset type');for(const [value,label]of [['all','All'],['images','Images'],['videos','Videos'],['markdown','Markdown'],['other','Other']] as const){const b=button(label,()=>void perform(async()=>{filter=value;drawControls();await savePrefs();await reload();}));b.setAttribute('aria-pressed',String(filter===value));filterRow.append(b);}
+  const filtersRow=el('div','','filters-row'),summary=el('div','','filter-summary');summary.append(count,refreshButton);filtersRow.append(filterRow,summary);controls.append(worktreeContext,filtersRow);filterRow.scrollLeft=filterScroll;if(restoreFilterFocus)(filterRow.querySelector('[aria-pressed=true]') as HTMLButtonElement)?.focus({preventScroll:true});
+  const busy=isRefreshing();refreshButton.disabled=emptyRefresh.disabled=!context?.active?.root||busy;refreshButton.setAttribute('aria-busy',String(busy));refreshGlyph.toggleAttribute('hidden',busy);refreshLoader.toggleAttribute('hidden',!busy);drawAssetCount();
+  drawSearchHeader();
+  emptyTitle.textContent=context?.active?.reason?'Remote assets unavailable':!context?.active?'Open a local workspace':search||filter!=='all'?'No matching assets':'Nothing generated yet';
+  emptyDescription.textContent=context?.reason??(search||filter!=='all'?'Try another search or asset type.':'Images, videos, Markdown and HTML created by your agents will appear here automatically.');
+  footer.replaceChildren();const dot=el('span','','live-dot'),version=el('span','v'+LIBRARY_PLUGIN_VERSION,'footer-version');version.title='Assets Library version '+LIBRARY_PLUGIN_VERSION;version.setAttribute('aria-label',version.title);footer.append(dot,el('span',context?.active?.root?'Collecting automatically · Current Worktree':'Local workspace required','footer-status'),version);
+}
+toolbar.append(iconButton('Discovery settings','more',showSettings));
+function gallery(restoreFocus=true){detail?.dispose();detail=undefined;view='gallery';controls.hidden=searchRow.hidden=false;scroller.replaceChildren(empty,grid.element);scroller.scrollTop=savedScroll.get(scrollKey())??0;drawControls();void perform(async()=>{await reload(true);if(restoreFocus&&selection)grid.restoreSelection(selection.id);});}
+function showInspector(a:AssetRecord){selection=a;view='inspector';savedScroll.set(scrollKey(),scroller.scrollTop);controls.hidden=searchRow.hidden=true;detail?.dispose();detail=inspector(a,gallery,t=>void perform(()=>copy(t)),()=>open(a),()=>void perform(async()=>{const r=await orca.plugin.request('library.action',{id:a.id,action:'explorer'});if(r.message)report(r.message);}),()=>['text/markdown','text/html'].includes(a.mimeType)?orca.plugin.request('library.documentPreview',{id:a.id}).then(r=>r.text):loadOriginal(a),report);scroller.replaceChildren(detail.section);scroller.scrollTop=0;detail.backButton.focus();}
+function showSettings(){view='settings';controls.hidden=searchRow.hidden=true;const page=el('section','','settings');page.append(button('All assets',gallery,'text-button','back'),el('h2','Discovery settings'),el('p','Defaults work immediately. These settings limit discovery of generated assets within approved roots.','note'));
+  const input=(title:string,value:string,multiline=false)=>{const label=el('label',title),field=multiline?el('textarea'):el('input');field.value=value;label.append(field);page.append(label);return field;};
+  const s=context?.settings;const excluded=input('Excluded folders · one per line',s?.excludedFolders.join('\n')??'',true),size=input('Maximum file size (MB)',String(s?.maxSizeMB??32)),extensions=input('Extensions · comma separated',s?.extensions.join(', ')??'png, jpg, jpeg, webp, svg, gif, avif, md, markdown, mp4, webm, html, htm');size.setAttribute('type','number');size.setAttribute('min','1');size.setAttribute('max','64');
+  const unavailable=el('input');unavailable.type='checkbox';unavailable.checked=s?.includeUnavailable??false;const unavailableLabel=el('label','','check-label');unavailableLabel.append(unavailable,el('span','Include unavailable files'));page.append(unavailableLabel,el('p','Show previously collected assets whose original files are missing.','note'));
+  if(context?.warnings.length)for(const warning of context.warnings)page.append(el('p',warning,'note'));
+  page.append(el('p','Generated assets may be Git-ignored. Dependency folders, caches and symlinks outside approved roots remain excluded.','note'),button('Save settings',()=>void perform(async()=>{const next:DiscoverySettings={includedFolders:s?.includedFolders??[],excludedFolders:excluded.value.split('\n').map(v=>v.trim()).filter(Boolean),maxSizeMB:Number(size.value),extensions:extensions.value.split(',').map(v=>v.trim().toLowerCase().replace(/^\./,'')),includeIgnored:s?.includeIgnored??false,includeUnavailable:unavailable.checked};await orca.plugin.request('library.settings',next);await savePrefs();await refreshContext();gallery();report('Settings saved');}),'primary'));
+  scroller.replaceChildren(page);page.querySelector('button')?.focus();}
+async function refreshContext(){const next=await orca.plugin.request('library.context'),nextKey=JSON.stringify([next.active?.id,next.active?.root]),changed=!!context&&activeWorkspaceKey!==nextKey;if(changed){if(view==='gallery')savedScroll.set(scrollKey(),scroller.scrollTop);selection=undefined;detail?.dispose();detail=undefined;view='gallery';controls.hidden=searchRow.hidden=false;scroller.replaceChildren(empty,grid.element);}context=next;activeWorkspaceKey=nextKey;if(view==='gallery')drawControls();return changed;}
+function onUpdate(){clearTimeout(updateTimer);updateTimer=setTimeout(()=>void perform(async()=>{const changed=await refreshContext();if(view==='gallery'){await reload(!changed);if(changed)scroller.scrollTop=savedScroll.get(scrollKey())??0;}else if(view==='inspector'&&selection){const next=await orca.plugin.request('library.detail',{id:selection.id});if(next.contentHash!==selection.contentHash||next.status!==selection.status)showInspector(next);}}),160);}
+orca.plugin.on('library.changed',onUpdate);orca.plugin.on('library.contextChanged',onUpdate);orca.on('theme',()=>{});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(view!=='gallery')gallery();else if(document.activeElement===searchInput&&search){e.preventDefault();clearSearch();}}if((e.metaKey||e.ctrlKey)&&e.key==='f'){e.preventDefault();if(view!=='gallery')gallery(false);searchInput.focus({preventScroll:true});searchInput.select();}});
+scroller.append(empty,loading,grid.element);empty.hidden=grid.element.hidden=true;
+void perform(async()=>{const prefs=await orca.storage.get('panel.preferences.v1');if(prefs&&typeof prefs==='object'&&!Array.isArray(prefs)){const savedFilter=prefs.filterVersion===2?prefs.filter:prefs.filter==='svg'||prefs.filter==='animations'?'images':prefs.filter==='other'?'markdown':prefs.filter;if(['all','images','videos','markdown','other'].includes(String(savedFilter)))filter=savedFilter as Filter;if(['newest','oldest','filename','size'].includes(String(prefs.sort)))sort=prefs.sort as Sort;if(prefs.galleryLayout==='list')galleryLayout='list';}grid.setLayout(galleryLayout);updateViewButtons();await savePrefs();await refreshContext();await reload();}).finally(()=>{if(loading.isConnected){loading.remove();empty.hidden=false;emptyTitle.textContent='Assets Library is waiting for Orca';emptyDescription.textContent='Open a supported local worktree.';}});

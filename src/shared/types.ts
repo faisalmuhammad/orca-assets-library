@@ -1,0 +1,23 @@
+export type AssetOrigin = 'confirmed-agent' | 'inferred-agent' | 'discovered';
+export type AssetRecord = {
+  id: string; projectId: string; worktreeId: string; worktreeName: string;
+  conversationId?: string; agentRunId?: string; agent?: string; tool?: string;
+  location?: 'chat'; sourceRoot?: string; orcaTabId?: string;
+  absolutePath: string; relativePath: string; filename: string; extension: string; mimeType: string;
+  sizeBytes: number; width?: number; height?: number; animated?: boolean;
+  createdAt: number; updatedAt: number; origin: AssetOrigin; contentHash: string; version: number;
+  status: 'available' | 'modified' | 'missing'; previewCacheKey?: string;
+};
+export type ProjectAppearance = { color?: string; iconName?: string };
+export type Workspace = { id: string; kind: 'worktree' | 'folder'; name: string; path: string; branch: string | null; hostId: string | null; projectId?: string; project?: string | null; projectAppearance?: ProjectAppearance; root?: string; libraryProjectId?: string; reason?: string };
+export type Scope = 'worktree' | 'project';
+export type Filter = 'all' | 'images' | 'videos' | 'markdown' | 'other';
+export type Sort = 'newest' | 'oldest' | 'filename' | 'size';
+export type Query = { scope: Scope; mode: 'generated' | 'discovered'; search?: string; filter?: Filter; sort?: Sort; worktreeId?: string; includeInferred?: boolean; includeUnavailable?: boolean; offset?: number; limit?: number };
+export type DiscoverySettings = { includedFolders: string[]; excludedFolders: string[]; maxSizeMB: number; extensions: string[]; includeIgnored: boolean; includeUnavailable?: boolean };
+export type Progress = { status: 'idle' | 'running' | 'complete' | 'cancelled' | 'failed'; scanned: number; found: number; skipped: number; message?: string };
+export type LibraryContext = { active: Workspace | null; workspaces: Workspace[]; reason?: string; warnings: string[]; refreshing?: boolean; collectionProgress?: Progress; settings: DiscoverySettings; canOpen: boolean; watching: number };
+export type ChatSource = { root: string; conversationId: string; orcaTabId: string; agent?: string };
+export type AssetPage = { assets: AssetRecord[]; total: number; revision: number };
+export type Preview = { mimeType: string; data?: string; totalBytes?: number; needsOriginal?: boolean; contentHash?: string; error?: string };
+export type ToolEvent = { agent: string; workspaceId: string | null; terminalId?: string; tool: string; input?: unknown; callId?: string; output?: unknown; conversationId?:string; orcaTabId?:string };

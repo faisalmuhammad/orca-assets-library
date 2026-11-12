@@ -1,0 +1,104 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "assets-library",
+  "name": "Assets Library",
+  "version": "1.0.0",
+  "description": "Automatically discover agent-generated images, videos, SVGs, Markdown and HTML in your current Orca worktree, including outputs from identifiable past chats.",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.257"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "runtime/worker.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "library",
+        "title": "Assets Library",
+        "icon": "book",
+        "entry": "runtime/ui/index.html",
+        "ui": "html"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      },
+      {
+        "on": "workspace.created"
+      },
+      {
+        "on": "workspace.removed"
+      },
+      {
+        "on": "agent.status.changed"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.tool.before",
+        "onError": "pass"
+      },
+      {
+        "event": "agent.tool.after",
+        "onError": "pass"
+      },
+      {
+        "event": "agent.launch.before",
+        "onError": "pass"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:read"
+    }
+  ],
+  "author": {
+    "name": "faisalmuhammad",
+    "url": "https://github.com/faisalmuhammad"
+  },
+  "repository": "https://github.com/faisalmuhammad/orca-assets-library",
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "Assets Library automatically discovers agent-generated images, videos, SVGs, Markdown and HTML in Orca."
+  },
+  "screenshots": [
+    {
+      "path": "assets/screenshot-dark.png",
+      "alt": "Automatically discovered agent-generated image and Markdown samples in Orca’s dark appearance.",
+      "caption": "New agent outputs are discovered automatically. Dark appearance with sample assets.",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/screenshot-light.png",
+      "alt": "Automatically discovered image and Markdown samples for the active Orca worktree in light appearance.",
+      "caption": "Find generated assets for your active worktree. Light appearance with sample assets.",
+      "theme": "light"
+    },
+    {
+      "path": "assets/screenshot-list.png",
+      "alt": "Assets Library list view with readable filenames, asset types and file sizes.",
+      "caption": "Locate automatically discovered outputs by filename, type and size. Sample assets.",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/screenshot-markdown.png",
+      "alt": "Assets Library inspector with a compact rendered Markdown preview and file details.",
+      "caption": "Generated Markdown is discovered alongside images. Sample document with paths and details.",
+      "theme": "light"
+    }
+  ]
+}
