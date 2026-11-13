@@ -7,8 +7,10 @@ export function assetPathKey(value:string):string {
   for(const part of input.split('/')){if(!part||part==='.')continue;if(part==='..'&&parts.length&&parts.at(-1)!=='..')parts.pop();else if(part!=='..'||!prefix)parts.push(part);}
   if(windows&&/^[a-z]:$/i.test(parts[0]??''))parts[0]=parts[0].toUpperCase();return prefix+parts.join('/');
 }
-export const isGeneratedAsset=(a:AssetRecord)=>a.origin==='confirmed-agent'&&a.location!=='chat';
-const confidence={discovered:0,'inferred-agent':1,'confirmed-agent':2};
+export const isGeneratedAsset=(a:AssetRecord)=>a.location==='chat'
+  ? ['confirmed-agent','chat-output'].includes(a.origin)&&typeof a.sourceRoot==='string'&&typeof a.conversationId==='string'&&/^[A-Za-z0-9_-]{1,200}$/.test(a.conversationId)
+  : a.origin==='confirmed-agent';
+const confidence={discovered:0,'inferred-agent':1,'chat-output':2,'confirmed-agent':3};
 export function mergeAssetRecords(a:AssetRecord,b:AssetRecord):AssetRecord {
   const newest=a.updatedAt>b.updatedAt?a:a.updatedAt<b.updatedAt?b:a.id.localeCompare(b.id)<=0?a:b;
   const provenance=confidence[a.origin]>confidence[b.origin]?a:confidence[a.origin]<confidence[b.origin]?b:newest;

@@ -2768,17 +2768,18 @@ function inspector(a, back, copy2, open2, explorer, load, report2) {
   const actions = el("div", "", "inspector-actions");
   const openButton = button("Open file", open2, "primary", "open");
   openButton.disabled = a.status === "missing";
-  actions.append(openButton, button("Copy reference", () => copy2((isDocument || isVideo ? "[" : "![") + a.filename.replace(/[\[\]]/g, "") + "](" + encodeURI(a.relativePath).replace(/[()]/g, (c) => "%" + c.charCodeAt(0).toString(16)) + ")"), "secondary", "copy"));
+  actions.append(openButton, button("Copy reference", () => copy2((isDocument || isVideo ? "[" : "![") + a.filename.replace(/[\[\]]/g, "") + "](" + encodeURI(a.location === "chat" && !a.originalPath ? a.absolutePath : a.relativePath).replace(/[()]/g, (c) => "%" + c.charCodeAt(0).toString(16)) + ")"), "secondary", "copy"));
   const details = el("dl", "", "metadata");
   for (const [label, value] of [["Path", a.relativePath], ["Worktree", a.worktreeName], ["Agent", a.agent ?? "Unavailable"], ["Tool", a.tool ?? "Unavailable"], ["Updated", new Date(a.updatedAt).toLocaleString()], ["Version", String(a.version)], ["Status", a.status]]) {
     details.append(el("dt", label), el("dd", value));
   }
+  if (a.originalPath) details.append(el("dt", "Original path"), el("dd", a.originalPath));
   const paths2 = el("div", "", "path-actions");
   paths2.append(button("Copy relative path", () => copy2(a.relativePath), "text-button"), button("Copy absolute path", () => copy2(a.absolutePath), "text-button"), button("Open in Explorer", explorer, "text-button", "folder"), button("View original resolution", () => {
     scale = Math.min(5, (a.width ?? stage.clientWidth) / Math.max(1, stage.clientWidth));
     update();
   }, "text-button", "expand"));
-  section.append(heading2, documentScroll?.element ?? stage, ...isVideo ? [] : isDocument ? [el("p", isHtml ? "HTML source preview \xB7 Open file to view the page." : "Document preview \xB7 Open file to read the full document.", "note")] : [controls2], title, sub, actions, details, paths2);
+  section.append(heading2, documentScroll?.element ?? stage, ...isVideo ? [] : isDocument ? [el("p", isHtml ? "HTML source preview \xB7 Open file to view the page." : "Document preview \xB7 Open file to read the full document.", "note")] : [controls2], title, sub, ...a.originalPath ? [el("p", "Working copy \xB7 Edits affect this file; its original stays unchanged.", "note")] : [], actions, details, paths2);
   if (isDocument || isVideo) paths2.lastElementChild?.remove();
   if (a.mimeType === "image/svg+xml") section.append(el("p", "SVG preview removes scripts, external resources, styles and unsupported elements. Open the original to inspect its full source.", "note"));
   let videoTimer;
@@ -3217,8 +3218,8 @@ function drawControls() {
   emptyTitle.textContent = context?.active?.reason ? "Remote assets unavailable" : !context?.active ? "Open a local workspace" : search || filter !== "all" ? "No matching assets" : "Nothing generated yet";
   emptyDescription.textContent = context?.reason ?? (search || filter !== "all" ? "Try another search or asset type." : "Images, videos, Markdown and HTML created by your agents will appear here automatically.");
   footer.replaceChildren();
-  const dot = el("span", "", "live-dot"), version = el("span", "v1.0.0", "footer-version");
-  version.title = "Assets Library version 1.0.0";
+  const dot = el("span", "", "live-dot"), version = el("span", "v1.0.1", "footer-version");
+  version.title = "Assets Library version 1.0.1";
   version.setAttribute("aria-label", version.title);
   footer.append(dot, el("span", context?.active?.root ? "Collecting automatically \xB7 Current Worktree" : "Local workspace required", "footer-status"), version);
 }
@@ -3310,7 +3311,7 @@ function onUpdate() {
       if (changed) scroller.scrollTop = savedScroll.get(scrollKey()) ?? 0;
     } else if (view === "inspector" && selection) {
       const next = await orca.plugin.request("library.detail", { id: selection.id });
-      if (next.contentHash !== selection.contentHash || next.status !== selection.status) showInspector(next);
+      if (next.contentHash !== selection.contentHash || next.status !== selection.status || next.absolutePath !== selection.absolutePath || next.originalPath !== selection.originalPath) showInspector(next);
     }
   }), 160);
 }

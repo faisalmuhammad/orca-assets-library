@@ -5,7 +5,7 @@ import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { CHUNK_SIZE, DEFAULT_SETTINGS, EXTENSIONS } from '../shared/constants';
-import type { AssetOrigin, DiscoverySettings, LibraryContext, Progress, Query, ToolEvent, Workspace } from '../shared/types';
+import type { AssetOrigin, AssetRecord, ChatSource, DiscoverySettings, LibraryContext, Progress, Query, ToolEvent, Workspace } from '../shared/types';
 import {isGeneratedAsset} from '../shared/asset-identity';
 import { selectAssets } from '../shared/query';
 import { chooseActive, resolveWorkspace, safePath, within } from './workspace-resolver';
@@ -16,12 +16,14 @@ import { Persistence } from './persistence';
 import { ThumbnailService } from './thumbnail-service';
 import { validateMarkdown, markdownThumbnail } from './markdown';
 import { validateHtml, htmlThumbnail } from './html';
-import { readAsset, validatedInput, imageMetadata } from './metadata-extractor';
+import { extract, readAsset, validatedInput, imageMetadata } from './metadata-extractor';
 import { reconcileWorkspace } from './workspace-reconciler';
 import { NativeWorkspaceAdapter } from './native-workspace-adapter';
 import { repairRenamedPluginPaths } from './asset-path-migration';
 import { openOriginal, type BrowserOpen } from './file-actions';
+import { EditorCopies } from './editor-copies';
 import { NativeWorktreeAdapter } from './native-worktree-adapter';
+import { collectChatAssets } from './chat-asset-discovery';
 import { videoMetadata } from './video-metadata';
 let shutdown:(()=>Promise<void>)|undefined;
 const message=(e:unknown)=>e instanceof Error?e.message:String(e);
@@ -41,6 +43,7 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
   let postTimer:ReturnType<typeof setTimeout>|undefined;
   const changed=()=>{if(stopped||postTimer)return;postTimer=setTimeout(()=>{postTimer=undefined;if(!stopped)orca.panels.post('library.changed',{revision:index.revision});},120);};
   const persistence=new Persistence(orca.storage,report),thumbs=new ThumbnailService(orca.storage),index=new AssetIndex(persistence,thumbs,changed),observer=new AgentObserver();
+  const editorCopies=new EditorCopies(orca.storage);
   let chain=Promise.resolve();
   const queue=<T>(task:()=>Promise<T>):Promise<T>=>{const next=chain.then(task);chain=next.then(()=>{},report);return next;};
   let loadedContext='',reconcileController:AbortController|undefined;
@@ -48,21 +51,55 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
   const nativeWorkspaces=options?.nativeWorkspaces??new NativeWorkspaceAdapter();
   const generatedHistory=options?.generatedHistory===false?undefined:options?.generatedHistory??new NativeWorktreeAdapter();
   let historyRunning=false,historyWorkspace='';
+  const chatSources=new Map<string,{worktreeId:string;source:ChatSource}>();
+  function sourceFor(a:AssetRecord){
+    const owner=a.sourceRoot?chatSources.get(a.sourceRoot):undefined;
+    return owner?.worktreeId===a.worktreeId&&owner.source.conversationId===a.conversationId&&within(owner.source.root,a.originalPath??a.absolutePath)?owner.source:undefined;
+  }
   let collectionProgress:Progress={status:'idle',found:0,scanned:0,skipped:0};
   function collectWorktreeHistory(){
     const w=active;if(!generatedHistory||!w?.root||historyRunning||stopped)return;historyRunning=true;
     const current:Progress={status:'running',found:0,scanned:0,skipped:0};
     if(historyWorkspace!==w.id+':'+w.root){historyWorkspace=w.id+':'+w.root;collectionProgress=current;changed();}
     const task=(async()=>{
-      for(const candidate of await generatedHistory.assets(w,nativeWorkspaces.aliases)){
-        current.scanned++;
-        if(stopped||active?.id!==w.id)return;
-        if(!supported(candidate.file,settings.extensions)||excluded(path.relative(w.root!,candidate.file),settings.excludedFolders))continue;
+      const stoppedHere=()=>stopped||active?.id!==w.id;
+      const ingest=async(file:string,event?:ToolEvent,source?:ChatSource)=>{
+        current.scanned++;if(stoppedHere())return;
+        const root=source?.root??w.root!;
+        if(!supported(file,settings.extensions)||excluded(path.relative(root,file),settings.excludedFolders))return;
         try{
-          const s=await stat(await safePath(w.root!,candidate.file)),known=index.records.get(index.id(w,candidate.file));
-          if(known&&known.status!=='missing'&&known.updatedAt===s.mtimeMs&&known.sizeBytes===s.size)continue;
-          await queue(async()=>{if(!stopped&&active?.id===w.id){await index.ingest(w,candidate.file,'confirmed-agent',settings.maxSizeMB*1024*1024,candidate.event);current.found++;}});
-        }catch{ /* Missing files, invalid formats and escaping symlinks cannot be indexed. */ }
+          const canonical=await safePath(root,file),s=await stat(canonical),known=index.records.get(index.id(w,canonical));
+          if(known?.originalPath===canonical){
+            // Keep copies already opened/edited, but never create or update one
+            // during discovery. If absent, recover the chat original in place.
+            try{const copy=await safePath(w.root!,known.absolutePath),cs=await stat(copy);
+              if(known.status==='missing'||known.updatedAt!==cs.mtimeMs||known.sizeBytes!==cs.size)await queue(()=>index.ingest(w,copy,known.origin,settings.maxSizeMB*1024*1024));
+              return;
+            }catch{ /* Fall through to the original; no copy is written. */ }
+          }
+          if(known?.absolutePath===canonical&&known.worktreeId===w.id&&known.projectId===w.libraryProjectId&&known.status!=='missing'&&known.updatedAt===s.mtimeMs&&known.sizeBytes===s.size)return;
+          await queue(async()=>{if(!stoppedHere()){
+            await index.ingest(w,canonical,source?'chat-output':'confirmed-agent',settings.maxSizeMB*1024*1024,event,source);
+            current.found++;
+          }});
+        }catch(e){
+          if((e as NodeJS.ErrnoException).code==='EACCES')report('Could not read asset '+path.basename(file)+': '+message(e));
+        }
+      };
+      try{
+        const sources=await generatedHistory.sources(w,nativeWorkspaces.aliases);
+        if(stoppedHere())return;
+        for(const [root,owner]of chatSources)if(owner.worktreeId===w.id)chatSources.delete(root);
+        for(const source of sources)chatSources.set(source.root,{worktreeId:w.id,source});
+        for(const source of sources){
+          await collectChatAssets(source,settings,stoppedHere,file=>ingest(file,undefined,source));
+          for(const a of index.records.values())if(a.worktreeId===w.id&&a.sourceRoot===source.root){
+            try{await stat(await safePath(a.originalPath?w.root!:source.root,a.absolutePath));}catch{index.missing(a.id);}
+          }
+        }
+      }catch(e){for(const [root,owner]of chatSources)if(owner.worktreeId===w.id)chatSources.delete(root);report('Chat output discovery unavailable: '+message(e));}
+      for(const candidate of await generatedHistory.assets(w,nativeWorkspaces.aliases)){
+        if(stoppedHere())return;await ingest(candidate.file,candidate.event);
       }
     })().then(()=>{current.status='complete';},e=>{current.status='failed';current.message=message(e);report('Worktree chat file history unavailable: '+message(e));}).finally(()=>{historyRunning=false;if(collectionProgress===current)changed();});
     reconciliations.add(task);void task.finally(()=>reconciliations.delete(task));
@@ -79,8 +116,9 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
   }
   const watcher=new FileWatcher((w,file,removed)=>{
     const known=index.records.get(index.id(w,file));
+    if(known&&path.resolve(file)!==known.absolutePath)return;
     if(removed){if(known)index.missing(known.id);return;}
-    if(known?.origin==='confirmed-agent')schedule(w,file,known.origin);
+    if(known&&isGeneratedAsset(known))schedule(w,file,known.origin);
   },report,()=>settings.excludedFolders);
   async function refreshNativeWorkspaces(){
     if(stopped)return;
@@ -171,12 +209,12 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
   }));
   for(const event of ['workspace.created','workspace.removed'] as const)subscriptions.push(orca.events.on(event,e=>{const match=workspaces.find(w=>w.path===e.path);if(match)aliases.set(e.workspaceId,match.id);void queue(async()=>{await refreshContext();const listed=workspaces.find(w=>w.path===e.path);if(listed)aliases.set(e.workspaceId,listed.id);}).catch(report);}));
   subscriptions.push(orca.events.on('workspace.changed',()=>{void queue(refreshContext).catch(report);}));
-  async function record(id:string) {await initialized;const a=index.records.get(id);if(!a)throw invalid('Unknown asset');const w=workspaces.find(w=>w.id===a.worktreeId);if(!w?.root||w.reason)throw new Error('Asset worktree is unavailable');if(!isGeneratedAsset(a)||!within(w.root,a.absolutePath))throw invalid('Asset is not a generated file inside its worktree');const root=w.root;await safePath(root,a.absolutePath);return {a,w,root};}
+  async function record(id:string) {await initialized;const a=index.records.get(id);if(!a)throw invalid('Unknown asset');const w=workspaces.find(w=>w.id===a.worktreeId);if(!w?.root||w.reason)throw new Error('Asset worktree is unavailable');const source=a.location==='chat'&&!a.originalPath?sourceFor(a):undefined,root=a.location==='chat'&&!a.originalPath?source?.root:w.root;if(!isGeneratedAsset(a)||!root||!within(root,a.absolutePath))throw invalid('Asset is not owned by this worktree or its chats');await safePath(root,a.absolutePath);return {a,w,root,source};}
   function handle<K extends keyof PluginRequests>(name:K,handler:(input:PluginRequestInput<K>)=>PluginRequestOutput<K>|Promise<PluginRequestOutput<K>>) {subscriptions.push(orca.panels.handle(name,async input=>JSON.parse(JSON.stringify(await handler(input)))));}
   handle('library.context',async()=>{await initialized;if(!workspaces.length)await queue(refreshContext);return context();});
   handle('library.list',async q=>{
     await initialized;if(!q||!['project','worktree'].includes(q.scope)||!['generated','discovered'].includes(q.mode))throw invalid('Invalid gallery query');
-    const assets=selectAssets(index.records.values(),active,{...q,scope:'worktree',mode:'generated',includeUnavailable:settings.includeUnavailable}), offset=Math.max(0,Math.floor(q.offset??0)),limit=Math.min(100,Math.max(1,Math.floor(q.limit??80)));
+    const assets=selectAssets([...index.records.values()].filter(a=>a.location!=='chat'||a.originalPath||sourceFor(a)),active,{...q,scope:'worktree',mode:'generated',includeUnavailable:settings.includeUnavailable}), offset=Math.max(0,Math.floor(q.offset??0)),limit=Math.min(100,Math.max(1,Math.floor(q.limit??80)));
     return {assets:assets.slice(offset,offset+limit),total:assets.length,revision:index.revision};
   });
   handle('library.detail',async({id})=>{await initialized;const a=index.records.get(id);if(!a)throw invalid('Unknown asset');return a;});
@@ -203,8 +241,8 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
   handle('library.preview',async({id,offset,contentHash})=>{
     if(!Number.isInteger(offset)||offset<0||offset%CHUNK_SIZE!==0)throw invalid('Invalid preview offset');
     try {
-      const {a,root,w}=await record(id);if(contentHash&&contentHash!==a.contentHash)throw new Error('Asset changed while loading. Retry the preview.');let original=originals.get(id);
-      if(!original||original.hash!==a.contentHash||Date.now()-original.at>30000){const data=await readAsset(root,a.absolutePath,Math.min(16,settings.maxSizeMB)*1024*1024);if(createHash('sha256').update(data.bytes).digest('hex')!==a.contentHash){await queue(()=>index.ingest(w,a.absolutePath,a.origin,settings.maxSizeMB*1024*1024,undefined));throw new Error('Asset changed while loading. Retry the preview.');}const isDocument=['text/markdown','text/html'].includes(a.mimeType),isVideo=a.mimeType.startsWith('video/'),bytes=isDocument?Buffer.from(a.mimeType==='text/html'?validateHtml(data.bytes):validateMarkdown(data.bytes)):isVideo?data.bytes:validatedInput(data.bytes);if(isVideo)videoMetadata(bytes,'.'+a.extension);else if(!isDocument)imageMetadata(bytes);original={bytes,hash:a.contentHash,at:Date.now()};originals.delete(id);originals.set(id,original);while(originals.size>4||[...originals.values()].reduce((n,v)=>n+v.bytes.length,0)>32*1024*1024)originals.delete(originals.keys().next().value!);}
+      const {a,root,w,source}=await record(id);if(contentHash&&contentHash!==a.contentHash)throw new Error('Asset changed while loading. Retry the preview.');let original=originals.get(id);
+      if(!original||original.hash!==a.contentHash||Date.now()-original.at>30000){const data=await readAsset(root,a.absolutePath,Math.min(16,settings.maxSizeMB)*1024*1024);if(createHash('sha256').update(data.bytes).digest('hex')!==a.contentHash){await queue(()=>index.ingest(w,a.absolutePath,a.origin,settings.maxSizeMB*1024*1024,undefined,source));throw new Error('Asset changed while loading. Retry the preview.');}const isDocument=['text/markdown','text/html'].includes(a.mimeType),isVideo=a.mimeType.startsWith('video/'),bytes=isDocument?Buffer.from(a.mimeType==='text/html'?validateHtml(data.bytes):validateMarkdown(data.bytes)):isVideo?data.bytes:validatedInput(data.bytes);if(isVideo)videoMetadata(bytes,'.'+a.extension);else if(!isDocument)imageMetadata(bytes);original={bytes,hash:a.contentHash,at:Date.now()};originals.delete(id);originals.set(id,original);while(originals.size>4||[...originals.values()].reduce((n,v)=>n+v.bytes.length,0)>32*1024*1024)originals.delete(originals.keys().next().value!);}
       return {mimeType:a.mimeType,contentHash:original.hash,totalBytes:original.bytes.length,data:original.bytes.subarray(offset,offset+CHUNK_SIZE).toString('base64')};
     }catch(e){return {mimeType:'image/webp',error:message(e)};}
   });
@@ -218,13 +256,43 @@ export default async function activate(orca:OrcaWorkerApi,options?:{nativeWorksp
       for(const a of [...index.records.values()]){
         if(stopped||active?.id!==workspaceId)return;
         if(a.worktreeId!==workspaceId||!isGeneratedAsset(a))continue;
-        try{const {w,root}=await record(a.id),s=await stat(await safePath(root,a.absolutePath));if(a.status==='missing'||a.updatedAt!==s.mtimeMs||a.sizeBytes!==s.size)await queue(()=>index.ingest(w,a.absolutePath,a.origin,settings.maxSizeMB*1024*1024,undefined));}
+        try{const {w,root,source}=await record(a.id),s=await stat(await safePath(root,a.absolutePath));if(a.status==='missing'||a.updatedAt!==s.mtimeMs||a.sizeBytes!==s.size)await queue(()=>index.ingest(w,a.absolutePath,a.origin,settings.maxSizeMB*1024*1024,undefined,source));}
         catch(e){index.missing(a.id);report(e);}
       }
     };
     refreshTask=run().catch(report).finally(()=>{refreshTask=undefined;changed();});changed();return {ok:true};
   });
-  handle('library.action',async({id,action})=>{const {a,w}=await record(id);if(action==='open'){try{await openOriginal(a,w,input=>orca.host.call('editor.open',input),options?.openBrowser);return {ok:true};}catch(e){return {ok:false,message:'Could not open '+a.filename+' in Orca: '+message(e)};}}if(action==='explorer'){await orca.host.call('workspace.open',{workspaceId:w.id});await orca.host.call('commands.run',{action:'sidebar.explorer.toggle'});return {ok:true,message:'Opened native Explorer. Locate '+a.relativePath+'.'};}throw invalid('Unknown file action');});
+  handle('library.action',async({id,action})=>{
+    const {a,w}=await record(id);
+    if(action==='open'){
+      try{
+        // A chat history entry may have an explicitly attributed worktree file
+        // at the same relative path. Verify current bytes before preferring it.
+        let preferred:AssetRecord|undefined;
+        if(a.location==='chat'&&!a.originalPath){
+          for(const candidate of index.records.values()){
+            if(candidate.id===a.id||candidate.worktreeId!==w.id||candidate.projectId!==w.libraryProjectId||candidate.location==='chat'||candidate.originalPath||candidate.origin!=='confirmed-agent'||candidate.relativePath!==a.relativePath)continue;
+            try{const current=await extract(w.root!,candidate.absolutePath,settings.maxSizeMB*1024*1024);const source=await extract(a.sourceRoot!,a.absolutePath,settings.maxSizeMB*1024*1024);if(current.contentHash===source.contentHash||candidate.conversationId===a.conversationId){preferred=candidate;break;}}catch{ /* A missing or changed candidate cannot replace the original. */ }
+          }
+        }
+        const result=await openOriginal(a,w,input=>orca.host.call('editor.open',input),options?.openBrowser,async(asset,workspace)=>{
+          const root=asset.location==='chat'?asset.sourceRoot!:workspace.root!,source=asset.location==='chat'?sourceFor(asset):undefined;
+          if(asset.location==='chat'&&!source)throw invalid('Chat source ownership is unavailable');
+          const metadata=await extract(root,asset.absolutePath,settings.maxSizeMB*1024*1024);
+          const file=await editorCopies.materialize(workspace,{...asset,contentHash:metadata.contentHash},settings.maxSizeMB*1024*1024);
+          await queue(()=>index.ingest(workspace,file,asset.origin,settings.maxSizeMB*1024*1024,undefined,source,{path:asset.absolutePath,contentHash:metadata.contentHash,updatedAt:metadata.mtime,sizeBytes:metadata.size}));
+          originals.delete(asset.id);
+          return file;
+        },preferred);
+        return {ok:true,...(result?.workingCopy?{message:'Opened a working copy. Edits affect the copy; its original stays unchanged.'}:{})};
+      }catch(e){return {ok:false,message:'Could not open '+a.filename+' in Orca: '+message(e)};}
+    }
+    if(action==='explorer'){
+      if(a.location==='chat'&&!a.originalPath)return {ok:false,message:'This historical file is stored with its chat. Copy its absolute path, or use Open to prepare an editor copy when needed.'};
+      await orca.host.call('workspace.open',{workspaceId:w.id});await orca.host.call('commands.run',{action:'sidebar.explorer.toggle'});return {ok:true,message:'Opened native Explorer. Locate '+a.relativePath+'.'};
+    }
+    throw invalid('Unknown file action');
+  });
   await initialized;await queue(refreshContext).catch(report);
   const timer=setInterval(()=>{void queue(refreshContext).catch(report);},30000);timer.unref();
   const inventoryTimer=setInterval(()=>{void queue(refreshNativeWorkspaces).catch(report);},5000);inventoryTimer.unref();

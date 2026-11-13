@@ -11,6 +11,7 @@ export function within(root: string, file: string): boolean { const rel = path.r
 export async function safePath(root: string, file: string): Promise<string> {
   if (!file || file.includes('\0')) throw new Error('Invalid file path');
   const canonicalRoot = await realpath(root);
+  if(path.basename(path.dirname(root))==='chat-scratch'&&/^[a-f0-9]{32}$/.test(path.basename(root))&&canonicalRoot!==path.resolve(root))throw new Error('Chat directory changed or became a symlink');
   if (!path.isAbsolute(file) && !within(canonicalRoot,path.resolve(canonicalRoot,file))) throw new Error('File is outside this worktree');
   const absolute = path.resolve(root,file);
   const canonical = await realpath(absolute);

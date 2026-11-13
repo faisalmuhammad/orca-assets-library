@@ -5,7 +5,8 @@ export function selectAssets(records: Iterable<AssetRecord>, active: Workspace |
   const root=assetPathKey(active.root).replace(/\/$/,'')+'/';
   const search = (q.search ?? '').trim().toLocaleLowerCase();
   return uniqueAssets([...records].filter(a => {
-    if (a.projectId !== active.libraryProjectId || a.worktreeId !== active.id || !assetPathKey(a.absolutePath).startsWith(root)) return false;
+    const sourceRoot=a.location==='chat'&&!a.originalPath&&a.sourceRoot?assetPathKey(a.sourceRoot).replace(/[/]$/,'')+'/':root;
+    if (a.projectId !== active.libraryProjectId || a.worktreeId !== active.id || !assetPathKey(a.absolutePath).startsWith(sourceRoot)) return false;
     if (q.worktreeId && a.worktreeId !== q.worktreeId) return false;
     if (!isGeneratedAsset(a) || q.includeInferred === false && a.origin === 'inferred-agent') return false;
     return true;

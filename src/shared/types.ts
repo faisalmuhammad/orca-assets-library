@@ -1,8 +1,9 @@
-export type AssetOrigin = 'confirmed-agent' | 'inferred-agent' | 'discovered';
+export type AssetOrigin = 'confirmed-agent' | 'chat-output' | 'inferred-agent' | 'discovered';
 export type AssetRecord = {
   id: string; projectId: string; worktreeId: string; worktreeName: string;
   conversationId?: string; agentRunId?: string; agent?: string; tool?: string;
   location?: 'chat'; sourceRoot?: string; orcaTabId?: string;
+  originalPath?: string; originalContentHash?: string; originalUpdatedAt?: number; originalSizeBytes?: number;
   absolutePath: string; relativePath: string; filename: string; extension: string; mimeType: string;
   sizeBytes: number; width?: number; height?: number; animated?: boolean;
   createdAt: number; updatedAt: number; origin: AssetOrigin; contentHash: string; version: number;

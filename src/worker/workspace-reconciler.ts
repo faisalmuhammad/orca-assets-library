@@ -3,7 +3,7 @@ import type { AssetOrigin, AssetRecord, DiscoverySettings, Workspace } from '../
 import { safePath } from './workspace-resolver';
 
 // Refresh explicitly attributed repository files. Ordinary files are never scanned
-// or promoted based on agent activity. Chat-folder assets are excluded.
+// or promoted based on agent activity. Include ready chat copies in the worktree.
 export async function reconcileWorkspace(
   workspaces: Workspace[], records: AssetRecord[], settings: DiscoverySettings,
   signal: AbortSignal,
@@ -14,7 +14,7 @@ export async function reconcileWorkspace(
   const roots = new Map(workspaces.filter(w => w.root && !w.reason).map(w => [w.id, w]));
   for (const asset of records) {
     if (signal.aborted) return;
-    if (asset.location === 'chat' || asset.origin !== 'confirmed-agent') continue;
+    if ((asset.location === 'chat' && !asset.originalPath) || !['confirmed-agent','chat-output'].includes(asset.origin)) continue;
     const w = roots.get(asset.worktreeId); if (!w?.root) continue;
     let s;
     try { s = await stat(await safePath(w.root, asset.absolutePath)); }

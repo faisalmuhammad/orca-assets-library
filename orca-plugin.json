@@ -3,8 +3,8 @@
   "manifestVersion": 2,
   "id": "assets-library",
   "name": "Assets Library",
-  "version": "1.0.0",
-  "description": "Automatically discover agent-generated images, videos, SVGs, Markdown and HTML in your current Orca worktree, including outputs from identifiable past chats.",
+  "version": "1.0.1",
+  "description": "Automatically discover agent-generated images, videos, SVGs, Markdown and HTML in your current Orca worktree and its associated chat folders.",
   "license": "MIT",
   "engines": {
     "orca": ">=1.4.257"

@@ -1,11 +1,11 @@
 # Discover generated assets with Assets Library
 
-Assets Library finds supported outputs generated inside the active worktree during Orca agent conversations. Ordinary repository files and Orca’s separate chat-output folders are never scanned or shown.
+Assets Library finds supported outputs in the active worktree and its associated chat folders. Ordinary repository files and unrelated chat folders remain excluded.
 
 ## Start automatic discovery
 
 1. Enable Assets Library and open an Orca worktree.
-2. Let an agent generate or modify a supported image, video, SVG, Markdown or HTML file inside the worktree through a tool that exposes write/output or structured file-change evidence.
+2. Let an agent generate or modify a supported image, video, SVG, Markdown or HTML file inside the worktree through a tool that exposes write/output or structured file-change evidence, or in that chat’s dedicated output folder.
 3. Open the book icon in the right sidebar to find outputs that the worker identified. No registration prompt or manual scan is required where sufficient evidence is available.
 4. Return to a worktree later to recover indexed outputs and files identified by recorded chat file-change paths.
 
@@ -13,11 +13,11 @@ Automatic discovery continues with the panel closed. A new result appears withou
 
 ## What is discovered automatically
 
-Library combines explicit tool-confirmed worktree outputs with recorded chat file-change paths. Activity timing alone does not add repository files. Only files physically inside the active worktree appear. Switching worktrees replaces the visible collection and exits any previous-worktree detail view. Old Project and All Discovered preferences migrate to current-worktree generated-only results.
+Library combines explicit tool-confirmed worktree outputs with recorded chat file-change paths. Activity timing alone does not add repository files. Worktree files and dedicated output folders owned by that worktree’s chats appear. Switching worktrees replaces the visible collection and exits any previous-worktree detail view. Old Project and All Discovered preferences migrate to current-worktree generated-only results.
 
 The rounded worktree strip shows the project's configured icon and color when Orca's CLI exposes them. Unsupported icon types use a color dot; missing metadata leaves the worktree name alone. The badge follows worktree switches and project appearance changes.
 
-When a worktree opens or activates, Library checks recorded worktree file-change metadata and refreshes known records. It updates previews after changes and marks removed originals unavailable. Background checks never inventory ordinary repository files or chat folders, or force the sidebar open. Previously indexed samples affected by the Library folder rename recover their paths only when the replacement original has the same content hash.
+When a worktree opens or activates, Library checks recorded worktree file-change metadata and refreshes known records. It updates previews after changes and marks removed worktree files unavailable. Background checks inspect owned chat folders but never inventory ordinary repository files or unrelated chats, or force the sidebar open. Previously indexed samples affected by the Library folder rename recover their paths only when the replacement original has the same content hash.
 
 ## Recheck generated outputs
 
@@ -25,7 +25,7 @@ Use the refresh icon immediately to the right of the asset count. It rechecks re
 
 Excluded folders, extensions and file-size limits are in the three-dot discovery settings menu. Generated outputs may be Git-ignored. Exclusions and safe-path checks still apply.
 
-Unavailable files are hidden by default, including from search and the asset count. Enable **Include unavailable files** in discovery settings to show missing originals from the saved generated-asset index. The setting persists across restarts and never includes ordinary repository files or chat-folder outputs. Disabling it hides missing records without deleting their metadata.
+Unavailable files are hidden by default, including from search and the asset count. Enable **Include unavailable files** in discovery settings to show missing displayed files from the saved generated-asset index. The setting persists across restarts and never includes ordinary repository files or unrelated chat outputs. Disabling it hides missing records without deleting their metadata.
 
 ## Locate a discovered output
 
@@ -33,9 +33,9 @@ Cards and List show the same discovery results. Search is always visible beside 
 
 The gallery fades into the panel background when more content is below. Its scrollbar appears on hover or keyboard focus without shifting cards, and the fade disappears at the bottom or when all results fit.
 
-Open navigates original images, SVGs, Markdown and videos to Orca’s editor. HTML opens in Orca’s browser. Info opens the sidebar inspector. Fit, zoom, pan and checkerboard controls apply to images. The All Assets header stays visible while details scroll. Markdown has a bounded rendered excerpt, a bottom fade and a hover/focus scrollbar. HTML (.html/.htm) appears under Other with a bounded source excerpt; scripts and linked resources never execute inside Info. Videos collects MP4 and WebM files with video tracks, frame thumbnails, metadata and file actions. Info shows native HTML video playback controls without extra decoder packages. Unsupported codecs or files above the 16 MB preview limit retain file actions and a fallback.
+Open navigates displayed images, SVGs, Markdown and videos to Orca’s editor. Fallback copies open in the editor; original worktree HTML opens in Orca’s browser. Info opens the sidebar inspector. Fit, zoom, pan and checkerboard controls apply to images. The All Assets header stays visible while details scroll. Markdown has a bounded rendered excerpt, a bottom fade and a hover/focus scrollbar. HTML (.html/.htm) appears under Other with a bounded source excerpt; scripts and linked resources never execute inside Info. Videos collects MP4 and WebM files with video tracks, frame thumbnails, metadata and file actions. Info shows native HTML video playback controls without extra decoder packages. Unsupported codecs or files above the 16 MB preview limit retain file actions and a fallback.
 
-Every editor request uses a path relative to and inside the canonical worktree. Chat-folder originals are excluded. Library never creates working copies or symlinks. Copy reference uses the worktree-relative original path. Missing files preserve metadata and cannot be opened.
+Every editor request uses a path relative to and inside the canonical worktree. Discovery indexes generated worktree files and session-owned chat originals without copying. For a chat history entry, Open prefers an explicitly attributed worktree file with the same relative path and either matching content or the same originating session. Ordinary files are never selected by filename alone. If no supported original route exists or opening is rejected, Library copies the file under .orca/assets-library/opened/<session-or-worktree>/<original relative path> and opens that copy in the editor. The entry keeps its identity and then previews/references the copy. Info clearly identifies working copies and their original paths. Successful original opens do not copy. Existing copies and edits are preserved across refresh and restart; background discovery never resyncs them. If a copy disappears while its chat source remains available, discovery restores the original history entry without writing a replacement. The source is never modified. Unavailable files retain metadata and cannot be opened.
 
 ## Discovery evidence and privacy
 

@@ -31,6 +31,7 @@ function within(root, file) {
 async function safePath(root, file) {
   if (!file || file.includes("\0")) throw new Error("Invalid file path");
   const canonicalRoot = await realpath(root);
+  if (path.basename(path.dirname(root)) === "chat-scratch" && /^[a-f0-9]{32}$/.test(path.basename(root)) && canonicalRoot !== path.resolve(root)) throw new Error("Chat directory changed or became a symlink");
   if (!path.isAbsolute(file) && !within(canonicalRoot, path.resolve(canonicalRoot, file))) throw new Error("File is outside this worktree");
   const absolute = path.resolve(root, file);
   const canonical = await realpath(absolute);
@@ -72,9 +73,9 @@ var init_workspace_resolver = __esm({
 });
 
 // src/worker/index.ts
-import path9 from "node:path";
+import path12 from "node:path";
 import { stat as stat5 } from "node:fs/promises";
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 
 // src/shared/constants.ts
 var EXTENSIONS = ["png", "jpg", "jpeg", "webp", "svg", "gif", "avif", "md", "markdown", "mp4", "webm", "html", "htm"];
@@ -95,8 +96,8 @@ function assetPathKey(value) {
   if (windows && /^[a-z]:$/i.test(parts[0] ?? "")) parts[0] = parts[0].toUpperCase();
   return prefix + parts.join("/");
 }
-var isGeneratedAsset = (a) => a.origin === "confirmed-agent" && a.location !== "chat";
-var confidence = { discovered: 0, "inferred-agent": 1, "confirmed-agent": 2 };
+var isGeneratedAsset = (a) => a.location === "chat" ? ["confirmed-agent", "chat-output"].includes(a.origin) && typeof a.sourceRoot === "string" && typeof a.conversationId === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(a.conversationId) : a.origin === "confirmed-agent";
+var confidence = { discovered: 0, "inferred-agent": 1, "chat-output": 2, "confirmed-agent": 3 };
 function mergeAssetRecords(a, b) {
   const newest = a.updatedAt > b.updatedAt ? a : a.updatedAt < b.updatedAt ? b : a.id.localeCompare(b.id) <= 0 ? a : b;
   const provenance = confidence[a.origin] > confidence[b.origin] ? a : confidence[a.origin] < confidence[b.origin] ? b : newest;
@@ -118,7 +119,8 @@ function selectAssets(records, active, q) {
   const root = assetPathKey(active.root).replace(/\/$/, "") + "/";
   const search = (q.search ?? "").trim().toLocaleLowerCase();
   return uniqueAssets([...records].filter((a) => {
-    if (a.projectId !== active.libraryProjectId || a.worktreeId !== active.id || !assetPathKey(a.absolutePath).startsWith(root)) return false;
+    const sourceRoot = a.location === "chat" && !a.originalPath && a.sourceRoot ? assetPathKey(a.sourceRoot).replace(/[/]$/, "") + "/" : root;
+    if (a.projectId !== active.libraryProjectId || a.worktreeId !== active.id || !assetPathKey(a.absolutePath).startsWith(sourceRoot)) return false;
     if (q.worktreeId && a.worktreeId !== q.worktreeId) return false;
     if (!isGeneratedAsset(a) || q.includeInferred === false && a.origin === "inferred-agent") return false;
     return true;
@@ -3475,16 +3477,16 @@ var MatcherView = class {
    * @returns {string|undefined}
    */
   getCurrentTag() {
-    const path10 = this._matcher.path;
-    return path10.length > 0 ? path10[path10.length - 1].tag : void 0;
+    const path13 = this._matcher.path;
+    return path13.length > 0 ? path13[path13.length - 1].tag : void 0;
   }
   /**
    * Get current namespace.
    * @returns {string|undefined}
    */
   getCurrentNamespace() {
-    const path10 = this._matcher.path;
-    return path10.length > 0 ? path10[path10.length - 1].namespace : void 0;
+    const path13 = this._matcher.path;
+    return path13.length > 0 ? path13[path13.length - 1].namespace : void 0;
   }
   /**
    * Get current node's attribute value.
@@ -3492,9 +3494,9 @@ var MatcherView = class {
    * @returns {*}
    */
   getAttrValue(attrName) {
-    const path10 = this._matcher.path;
-    if (path10.length === 0) return void 0;
-    return path10[path10.length - 1].values?.[attrName];
+    const path13 = this._matcher.path;
+    if (path13.length === 0) return void 0;
+    return path13[path13.length - 1].values?.[attrName];
   }
   /**
    * Check if current node has an attribute.
@@ -3502,9 +3504,9 @@ var MatcherView = class {
    * @returns {boolean}
    */
   hasAttr(attrName) {
-    const path10 = this._matcher.path;
-    if (path10.length === 0) return false;
-    const current = path10[path10.length - 1];
+    const path13 = this._matcher.path;
+    if (path13.length === 0) return false;
+    const current = path13[path13.length - 1];
     return current.values !== void 0 && attrName in current.values;
   }
   /**
@@ -3530,18 +3532,18 @@ var MatcherView = class {
    * @returns {number}
    */
   getPosition() {
-    const path10 = this._matcher.path;
-    if (path10.length === 0) return -1;
-    return path10[path10.length - 1].position ?? 0;
+    const path13 = this._matcher.path;
+    if (path13.length === 0) return -1;
+    return path13[path13.length - 1].position ?? 0;
   }
   /**
    * Get current node's repeat counter (occurrence count of this tag name).
    * @returns {number}
    */
   getCounter() {
-    const path10 = this._matcher.path;
-    if (path10.length === 0) return -1;
-    return path10[path10.length - 1].counter ?? 0;
+    const path13 = this._matcher.path;
+    if (path13.length === 0) return -1;
+    return path13[path13.length - 1].counter ?? 0;
   }
   /**
    * Get current node's sibling index (alias for getPosition).
@@ -5644,6 +5646,7 @@ var AssetIndex = class {
       this.persistence.put(merged);
     }
     this.paths.set(key, merged.id);
+    if (merged.originalPath) this.paths.set(assetPathKey(merged.originalPath), merged.id);
     this.records.set(merged.id, merged);
   }
   async relocate(w, asset, file, maxBytes) {
@@ -5654,25 +5657,33 @@ var AssetIndex = class {
     this.restore(moved);
     return this.ingest(w, canonical, asset.origin, maxBytes);
   }
-  async ingest(w, file, origin, maxBytes, event, source) {
-    const root = source?.root ?? w.root;
+  async ingest(w, file, origin, maxBytes, event, source, original) {
+    const root = original ? w.root : source?.root ?? w.root;
     const result = await extract(root, file, maxBytes), canonical = await Promise.resolve().then(() => (init_workspace_resolver(), workspace_resolver_exports)).then((m) => m.safePath(root, file));
-    const id = this.id(w, canonical), old = this.records.get(id);
+    const id = this.id(w, original?.path ?? canonical), old = this.records.get(id);
     if (!old && this.records.size >= MAX_ASSETS) throw new Error("Asset index limit reached (20,000 files)");
-    const nextOrigin = origin === "confirmed-agent" ? origin : old?.origin === "confirmed-agent" ? old.origin : origin === "inferred-agent" ? origin : old?.origin ?? origin;
+    const nextOrigin = origin === "confirmed-agent" ? origin : old?.origin === "confirmed-agent" ? old.origin : origin === "chat-output" ? origin : origin === "inferred-agent" ? origin : old?.origin ?? origin;
     const changed = !!old && old.contentHash !== result.contentHash;
-    const a = { ...old, id, projectId: w.libraryProjectId, worktreeId: w.id, worktreeName: w.name, absolutePath: canonical, relativePath: path3.relative(root, canonical), filename: path3.basename(canonical), extension: path3.extname(canonical).slice(1).toLowerCase(), mimeType: result.mimeType, sizeBytes: result.size, width: result.width, height: result.height, animated: result.animated, createdAt: old?.createdAt ?? result.birthtime, updatedAt: result.mtime, origin: nextOrigin, contentHash: result.contentHash, version: old ? old.version + (changed ? 1 : 0) : 1, status: changed ? "modified" : "available", previewCacheKey: result.contentHash, ...source ? { location: "chat", sourceRoot: source.root, conversationId: source.conversationId, orcaTabId: source.orcaTabId, agent: source.agent } : {} };
+    const a = { ...old, id, projectId: w.libraryProjectId, worktreeId: w.id, worktreeName: w.name, absolutePath: canonical, relativePath: path3.relative(root, canonical), filename: path3.basename(canonical), extension: path3.extname(canonical).slice(1).toLowerCase(), mimeType: result.mimeType, sizeBytes: result.size, width: result.width, height: result.height, animated: result.animated, createdAt: old?.createdAt ?? result.birthtime, updatedAt: result.mtime, origin: nextOrigin, contentHash: result.contentHash, version: old ? old.version + (changed ? 1 : 0) : 1, status: changed ? "modified" : "available", previewCacheKey: result.contentHash, ...source ? { location: "chat", sourceRoot: source.root, conversationId: source.conversationId, orcaTabId: source.orcaTabId, agent: source.agent } : {}, ...original ? { originalPath: original.path, originalContentHash: original.contentHash, originalUpdatedAt: original.updatedAt, originalSizeBytes: original.sizeBytes } : {} };
+    if (!original && (source || canonical === old?.originalPath)) {
+      delete a.originalPath;
+      delete a.originalContentHash;
+      delete a.originalUpdatedAt;
+      delete a.originalSizeBytes;
+    }
     if (origin === "confirmed-agent" && event) {
       a.agent = event.agent;
       a.tool = event.tool;
       if (event.conversationId) a.conversationId = event.conversationId;
       if (event.orcaTabId) a.orcaTabId = event.orcaTabId;
     }
-    if (old?.contentHash === a.contentHash && old.updatedAt === a.updatedAt && old.sizeBytes === a.sizeBytes && old.status !== "missing" && old.origin === a.origin && old.worktreeId === a.worktreeId && old.projectId === a.projectId) {
+    if (old?.absolutePath === a.absolutePath && old.originalUpdatedAt === a.originalUpdatedAt && old.originalContentHash === a.originalContentHash && old.contentHash === a.contentHash && old.updatedAt === a.updatedAt && old.sizeBytes === a.sizeBytes && old.status !== "missing" && old.origin === a.origin && old.worktreeId === a.worktreeId && old.projectId === a.projectId) {
       if (result.thumbnail && !await this.thumbnails.get(a.contentHash)) await this.thumbnails.put(a.contentHash, result.thumbnail, result.thumbnailMime);
       return old;
     }
+    if (old && old.absolutePath !== canonical && this.paths.get(assetPathKey(old.absolutePath)) === id) this.paths.delete(assetPathKey(old.absolutePath));
     this.paths.set(assetPathKey(canonical), id);
+    if (a.originalPath) this.paths.set(assetPathKey(a.originalPath), id);
     this.records.set(id, a);
     this.persistence.put(a);
     this.revision++;
@@ -5790,7 +5801,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 var SHARDS = 64;
 var FORMAT = "asset-shard-v2";
 var bucket = (id) => createHash3("sha256").update(id).digest()[0] % SHARDS;
-var valid = (v) => !!v && typeof v === "object" && !Array.isArray(v) && typeof v.id === "string" && typeof v.absolutePath === "string" && typeof v.contentHash === "string" && ["confirmed-agent", "inferred-agent", "discovered"].includes(v.origin);
+var valid = (v) => !!v && typeof v === "object" && !Array.isArray(v) && typeof v.id === "string" && typeof v.absolutePath === "string" && typeof v.contentHash === "string" && ["confirmed-agent", "chat-output", "inferred-agent", "discovered"].includes(v.origin);
 function unpack(v) {
   if (valid(v)) return [v];
   if (v && typeof v === "object" && !Array.isArray(v) && "format" in v && v.format === FORMAT && "data" in v && typeof v.data === "string") {
@@ -5969,7 +5980,7 @@ async function reconcileWorkspace(workspaces, records, settings, signal, ingest,
   const roots = new Map(workspaces.filter((w) => w.root && !w.reason).map((w) => [w.id, w]));
   for (const asset of records) {
     if (signal.aborted) return;
-    if (asset.location === "chat" || asset.origin !== "confirmed-agent") continue;
+    if (asset.location === "chat" && !asset.originalPath || !["confirmed-agent", "chat-output"].includes(asset.origin)) continue;
     const w = roots.get(asset.worktreeId);
     if (!w?.root) continue;
     let s;
@@ -6114,21 +6125,153 @@ function browserOpener(run = execute3) {
     const { stdout } = await run(cli, ["tab", "create", "--url", pathToFileURL(file).href, "--worktree", "path:" + w.root, "--environment", "local", "--json"], { timeout: 1e4, maxBuffer: 32768 });
     const response = JSON.parse(stdout.slice(stdout.indexOf("{")));
     if (response.ok !== true || typeof response.result?.browserPageId !== "string") throw new Error(response.error?.message ?? "Orca did not open the browser tab");
+    const switched = await run(cli, ["tab", "switch", "--page", response.result.browserPageId, "--worktree", "path:" + w.root, "--environment", "local", "--json"], { timeout: 1e4, maxBuffer: 32768 });
+    const state = JSON.parse(switched.stdout.slice(switched.stdout.indexOf("{")));
+    if (state.ok !== true) throw new Error(state.error?.message ?? "Orca could not show the asset tab");
   };
 }
-async function openOriginal(asset, w, editor, browser = browserOpener()) {
-  if (!w.root || !path7.isAbsolute(asset.absolutePath) || !within(w.root, asset.absolutePath) || asset.location === "chat") throw new Error("The original is outside the current worktree.");
-  if (asset.mimeType === "text/html") {
-    await browser(asset.absolutePath, w);
-    return;
+async function openOriginal(asset, w, editor, browser = browserOpener(), copy, preferred) {
+  const sourceRoot = asset.location === "chat" && !asset.originalPath ? asset.sourceRoot : w.root;
+  if (!w.root || !sourceRoot || !path7.isAbsolute(asset.absolutePath) || !within(sourceRoot, asset.absolutePath)) throw new Error("The original is outside the current worktree or its owned chat folder.");
+  const target = preferred ?? asset;
+  if (preferred && (!path7.isAbsolute(preferred.absolutePath) || !within(w.root, preferred.absolutePath))) throw new Error("The matching file is outside the current worktree.");
+  const edit = async (file) => {
+    const result = await editor({ workspaceId: w.id, path: path7.relative(w.root, file) });
+    if (result && typeof result === "object" && "opened" in result && result.opened !== true) throw new Error("Orca did not open the file");
+  };
+  try {
+    if (!within(w.root, target.absolutePath)) throw new Error("Orca\u2019s editor requires a file inside the worktree");
+    if (target.mimeType === "text/html" && !target.originalPath) await browser(target.absolutePath, w);
+    else await edit(target.absolutePath);
+    return target.originalPath ? { workingCopy: target.absolutePath } : void 0;
+  } catch (originalError) {
+    if (!copy || target.originalPath) throw originalError;
+    try {
+      const file = await copy(target, w);
+      if (!path7.isAbsolute(file) || !within(w.root, file)) throw new Error("Working copy is outside the worktree");
+      await edit(file);
+      return { workingCopy: file };
+    } catch (e) {
+      throw new Error("Original could not open: " + (originalError instanceof Error ? originalError.message : String(originalError)) + ". Working copy could not open: " + (e instanceof Error ? e.message : String(e)));
+    }
   }
-  await editor({ workspaceId: w.id, path: path7.relative(w.root, asset.absolutePath) });
 }
+
+// src/worker/editor-copies.ts
+import path8 from "node:path";
+import { mkdir, lstat, realpath as realpath2, open as open2, rename, unlink } from "node:fs/promises";
+import { constants as constants2 } from "node:fs";
+import { createHash as createHash4, randomUUID } from "node:crypto";
+init_workspace_resolver();
+var EditorCopies = class {
+  constructor(storage) {
+    this.storage = storage;
+  }
+  records = /* @__PURE__ */ new Map();
+  pending = /* @__PURE__ */ new Map();
+  initialized;
+  saves = Promise.resolve();
+  init() {
+    return this.initialized ??= (async () => {
+      const value = await this.storage.get("editor.copies.v1");
+      if (Array.isArray(value)) for (const entry of value.slice(-1e3)) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry) && "id" in entry && typeof entry.id === "string" && "sourceHash" in entry && typeof entry.sourceHash === "string" && "copyPath" in entry && typeof entry.copyPath === "string") this.records.set(entry.id, { sourceHash: entry.sourceHash, copyPath: entry.copyPath });
+      }
+    })();
+  }
+  async materialize(w, a, maxBytes) {
+    await this.init();
+    const sourceRoot = a.location === "chat" ? a.sourceRoot : w.root;
+    if (!w.root || !sourceRoot || !within(sourceRoot, a.absolutePath) || a.originalPath || a.location === "chat" && (!a.conversationId || !/^[A-Za-z0-9_-]{1,200}$/.test(a.conversationId))) throw new Error("Invalid working-copy request");
+    const key = w.id + ":" + a.id, existing = this.pending.get(key);
+    if (existing) return existing;
+    const task = this.copy(w, a, key, maxBytes).finally(() => this.pending.delete(key));
+    this.pending.set(key, task);
+    return task;
+  }
+  async copy(w, a, key, maxBytes) {
+    const sourceRoot = a.location === "chat" ? a.sourceRoot : w.root, root = await realpath2(w.root), relative = path8.relative(sourceRoot, a.absolutePath);
+    const target = path8.join(root, ".orca", "assets-library", "opened", a.location === "chat" ? a.conversationId : "worktree", relative);
+    if (!relative || !within(root, target)) throw new Error("Working copy would leave the worktree");
+    const saved = this.records.get(key);
+    if (saved?.sourceHash === a.contentHash && saved.copyPath === target || a.originalContentHash === a.contentHash) {
+      try {
+        const info = await lstat(target);
+        if (info.isFile() && !info.isSymbolicLink()) return await safePath(root, target);
+      } catch (e) {
+        if (e.code !== "ENOENT") throw e;
+      }
+    }
+    const data = await readAsset(sourceRoot, a.absolutePath, maxBytes), sourceHash = createHash4("sha256").update(data.bytes).digest("hex");
+    if (sourceHash !== a.contentHash) throw new Error("Asset changed while preparing its copy; retry after writes settle");
+    let folder = root;
+    for (const part of path8.relative(root, path8.dirname(target)).split(path8.sep)) {
+      folder = path8.join(folder, part);
+      await safePath(root, path8.dirname(folder));
+      try {
+        await mkdir(folder, { mode: 448 });
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+      }
+      const info = await lstat(folder);
+      if (!info.isDirectory() || info.isSymbolicLink() || !within(root, await realpath2(folder))) throw new Error("Working-copy folder is unsafe");
+    }
+    let copyHash;
+    try {
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error("Working-copy destination is unsafe");
+      if (info.size === 0 || info.size > maxBytes) return await safePath(root, target);
+      const copy = await readAsset(root, target, maxBytes);
+      copyHash = createHash4("sha256").update(copy.bytes).digest("hex");
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+    const previous = this.records.get(key);
+    const lastWriteHash = previous?.copyPath === target ? previous.sourceHash : a.originalContentHash;
+    if (copyHash && copyHash !== sourceHash && copyHash !== lastWriteHash) return await safePath(root, target);
+    if (copyHash !== sourceHash) {
+      const temporary = path8.join(path8.dirname(target), ".library-copy-" + randomUUID());
+      const handle = await open2(temporary, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
+      try {
+        await handle.writeFile(data.bytes);
+        await handle.utimes(new Date(data.mtime), new Date(data.mtime));
+        await handle.close();
+        await safePath(root, path8.dirname(target));
+        await rename(temporary, target);
+      } finally {
+        await handle.close().catch(() => {
+        });
+        await unlink(temporary).catch(() => {
+        });
+      }
+    }
+    this.records.delete(key);
+    this.records.set(key, { sourceHash, copyPath: target });
+    const values = () => [...this.records].map(([id, v]) => ({ id, ...v }));
+    while (this.records.size > 256 || Buffer.byteLength(JSON.stringify(values())) > 128 * 1024) this.records.delete(this.records.keys().next().value);
+    const snapshot = values(), save = this.saves.catch(() => {
+    }).then(() => this.storage.set("editor.copies.v1", snapshot));
+    this.saves = save;
+    await save;
+    return await safePath(root, target);
+  }
+};
 
 // src/worker/native-worktree-adapter.ts
 import { execFile as execFile4 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
-import path8 from "node:path";
+import path10 from "node:path";
+import { lstat as lstat2, realpath as realpath3 } from "node:fs/promises";
+
+// src/shared/chat-source.ts
+import { createHash as createHash5 } from "node:crypto";
+import path9 from "node:path";
+function chatDirectory(dataDirectory, sessionId) {
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(sessionId)) throw new Error("Invalid chat session identity");
+  return path9.join(dataDirectory, "chat-scratch", createHash5("sha256").update(sessionId, "utf8").digest("hex").slice(0, 32));
+}
+
+// src/worker/native-worktree-adapter.ts
 init_workspace_resolver();
 var execute4 = promisify4(execFile4);
 var object3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
@@ -6138,9 +6281,40 @@ var read = async (database, sql) => {
   return stdout.trim() ? JSON.parse(stdout) : [];
 };
 var NativeWorktreeAdapter = class {
-  constructor(reader = read, database = path8.join(defaultOrcaDataDirectory(), "agent-session-journal.db")) {
+  constructor(reader = read, database = path10.join(defaultOrcaDataDirectory(), "agent-session-journal.db")) {
     this.reader = reader;
     this.database = database;
+  }
+  async sources(w, aliases) {
+    if (!w.root || w.reason || w.hostId !== null && w.hostId !== "local") return [];
+    const owners = [w.id, ...[...aliases].filter(([, id]) => id === w.id).map(([alias]) => alias)];
+    const rows = await this.reader(
+      this.database,
+      "SELECT session_id,json_extract(record_json,'$.location.workspaceId') AS workspace_id,json_extract(record_json,'$.provider') AS agent FROM agent_session_records WHERE json_extract(record_json,'$.schemaVersion')=2 AND json_extract(record_json,'$.location.executionHostId')='local' AND json_extract(record_json,'$.location.workspaceId') IN (" + owners.map(quote).join(",") + ") LIMIT 501;"
+    );
+    if (!Array.isArray(rows) || rows.length > 500) throw new Error("Chat ownership metadata is unavailable or exceeds its safe limit.");
+    const sources = [], dataDirectory = path10.dirname(this.database), scratch = path10.join(dataDirectory, "chat-scratch");
+    let canonicalScratch;
+    try {
+      if (!(await lstat2(scratch)).isDirectory()) return [];
+      canonicalScratch = await realpath3(scratch);
+    } catch {
+      return [];
+    }
+    for (const value of rows) {
+      const r = object3(value);
+      if (!r || typeof r.workspace_id !== "string" || !owners.includes(r.workspace_id) || typeof r.session_id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(r.session_id)) continue;
+      const root = chatDirectory(dataDirectory, r.session_id);
+      try {
+        if (!(await lstat2(root)).isDirectory()) continue;
+        const canonical = await realpath3(root);
+        if (path10.dirname(canonical) !== canonicalScratch) continue;
+        sources.push({ root: canonical, conversationId: r.session_id, orcaTabId: "structured-agent-session-" + r.session_id, agent: typeof r.agent === "string" ? r.agent : void 0 });
+      } catch (e) {
+        if (e.code === "ENOENT") sources.push({ root: path10.join(canonicalScratch, path10.basename(root)), conversationId: r.session_id, orcaTabId: "structured-agent-session-" + r.session_id, agent: typeof r.agent === "string" ? r.agent : void 0 });
+      }
+    }
+    return sources;
   }
   async assets(w, aliases) {
     if (!w.root || w.reason || w.hostId !== null && w.hostId !== "local") return [];
@@ -6169,13 +6343,36 @@ var NativeWorktreeAdapter = class {
     for (const value of rows) {
       const r = object3(value);
       if (!r || typeof r.workspace_id !== "string" || !owners.includes(r.workspace_id) || typeof r.session_id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(r.session_id) || typeof r.path !== "string" || r.path.length > 2048 || r.path.includes("\0")) continue;
-      if (!path8.isAbsolute(r.path) || !within(w.root, r.path)) continue;
-      const file = path8.resolve(r.path), event = { agent: typeof r.agent === "string" ? r.agent : "agent", workspaceId: w.id, tool: "native-file-change", conversationId: r.session_id, orcaTabId: "structured-agent-session-" + r.session_id };
+      if (!path10.isAbsolute(r.path) || !within(w.root, r.path)) continue;
+      const file = path10.resolve(r.path), event = { agent: typeof r.agent === "string" ? r.agent : "agent", workspaceId: w.id, tool: "native-file-change", conversationId: r.session_id, orcaTabId: "structured-agent-session-" + r.session_id };
       files.set(file, { file, event });
     }
     return [...files.values()];
   }
 };
+
+// src/worker/chat-asset-discovery.ts
+import path11 from "node:path";
+import { readdir as readdir2 } from "node:fs/promises";
+async function collectChatAssets(source, settings, stopped, ingest) {
+  let entries = 0;
+  async function visit(folder, depth) {
+    if (stopped() || depth > 12) return;
+    for (const entry of await readdir2(folder, { withFileTypes: true })) {
+      if (stopped()) return;
+      if (++entries > 1e4) throw new Error("Chat asset discovery reached its 10,000-entry limit.");
+      const file = path11.join(folder, entry.name), relative = path11.relative(source.root, file);
+      if (entry.isSymbolicLink() || excluded(relative, settings.excludedFolders) || relative.split(path11.sep).some((p) => ["video-tools", "site-packages", "imageio_ffmpeg"].includes(p))) continue;
+      if (entry.isDirectory()) await visit(file, depth + 1);
+      else if (entry.isFile() && supported(file, settings.extensions)) await ingest(file);
+    }
+  }
+  try {
+    await visit(source.root, 0);
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+}
 
 // src/worker/index.ts
 var shutdown;
@@ -6186,7 +6383,7 @@ function settingsInput(input) {
   const v = input;
   if (v.includeUnavailable !== void 0 && typeof v.includeUnavailable !== "boolean") throw invalid2("Include unavailable files must be enabled or disabled");
   if (!Array.isArray(v.includedFolders) || !Array.isArray(v.excludedFolders) || !Array.isArray(v.extensions) || typeof v.includeIgnored !== "boolean" || !Number.isFinite(v.maxSizeMB) || v.maxSizeMB < 1 || v.maxSizeMB > 64) throw invalid2("Use a file-size limit from 1 to 64 MB");
-  for (const f of [...v.includedFolders, ...v.excludedFolders]) if (typeof f !== "string" || f.length > 500 || path9.isAbsolute(f) || f.split(/[\/\\]/).includes("..")) throw invalid2("Folders must be relative paths inside the worktree");
+  for (const f of [...v.includedFolders, ...v.excludedFolders]) if (typeof f !== "string" || f.length > 500 || path12.isAbsolute(f) || f.split(/[\/\\]/).includes("..")) throw invalid2("Folders must be relative paths inside the worktree");
   if (v.includedFolders.length > 32 || v.excludedFolders.length > 64 || !v.extensions.length || v.extensions.some((e) => !EXTENSIONS.includes(e))) throw invalid2("Choose supported asset extensions");
   return { includedFolders: v.includedFolders.filter(Boolean), excludedFolders: v.excludedFolders.filter(Boolean), extensions: [...new Set(v.extensions)], maxSizeMB: v.maxSizeMB, includeIgnored: v.includeIgnored, includeUnavailable: v.includeUnavailable ?? false };
 }
@@ -6210,6 +6407,7 @@ async function activate(orca, options) {
     }, 120);
   };
   const persistence = new Persistence(orca.storage, report), thumbs = new ThumbnailService(orca.storage), index = new AssetIndex(persistence, thumbs, changed), observer = new AgentObserver();
+  const editorCopies = new EditorCopies(orca.storage);
   let chain = Promise.resolve();
   const queue = (task) => {
     const next = chain.then(task);
@@ -6222,6 +6420,11 @@ async function activate(orca, options) {
   const nativeWorkspaces = options?.nativeWorkspaces ?? new NativeWorkspaceAdapter();
   const generatedHistory = options?.generatedHistory === false ? void 0 : options?.generatedHistory ?? new NativeWorktreeAdapter();
   let historyRunning = false, historyWorkspace = "";
+  const chatSources = /* @__PURE__ */ new Map();
+  function sourceFor(a) {
+    const owner = a.sourceRoot ? chatSources.get(a.sourceRoot) : void 0;
+    return owner?.worktreeId === a.worktreeId && owner.source.conversationId === a.conversationId && within(owner.source.root, a.originalPath ?? a.absolutePath) ? owner.source : void 0;
+  }
   let collectionProgress = { status: "idle", found: 0, scanned: 0, skipped: 0 };
   function collectWorktreeHistory() {
     const w = active;
@@ -6234,21 +6437,55 @@ async function activate(orca, options) {
       changed();
     }
     const task = (async () => {
-      for (const candidate of await generatedHistory.assets(w, nativeWorkspaces.aliases)) {
+      const stoppedHere = () => stopped || active?.id !== w.id;
+      const ingest = async (file, event, source) => {
         current.scanned++;
-        if (stopped || active?.id !== w.id) return;
-        if (!supported(candidate.file, settings.extensions) || excluded(path9.relative(w.root, candidate.file), settings.excludedFolders)) continue;
+        if (stoppedHere()) return;
+        const root = source?.root ?? w.root;
+        if (!supported(file, settings.extensions) || excluded(path12.relative(root, file), settings.excludedFolders)) return;
         try {
-          const s = await stat5(await safePath(w.root, candidate.file)), known = index.records.get(index.id(w, candidate.file));
-          if (known && known.status !== "missing" && known.updatedAt === s.mtimeMs && known.sizeBytes === s.size) continue;
+          const canonical = await safePath(root, file), s = await stat5(canonical), known = index.records.get(index.id(w, canonical));
+          if (known?.originalPath === canonical) {
+            try {
+              const copy = await safePath(w.root, known.absolutePath), cs = await stat5(copy);
+              if (known.status === "missing" || known.updatedAt !== cs.mtimeMs || known.sizeBytes !== cs.size) await queue(() => index.ingest(w, copy, known.origin, settings.maxSizeMB * 1024 * 1024));
+              return;
+            } catch {
+            }
+          }
+          if (known?.absolutePath === canonical && known.worktreeId === w.id && known.projectId === w.libraryProjectId && known.status !== "missing" && known.updatedAt === s.mtimeMs && known.sizeBytes === s.size) return;
           await queue(async () => {
-            if (!stopped && active?.id === w.id) {
-              await index.ingest(w, candidate.file, "confirmed-agent", settings.maxSizeMB * 1024 * 1024, candidate.event);
+            if (!stoppedHere()) {
+              await index.ingest(w, canonical, source ? "chat-output" : "confirmed-agent", settings.maxSizeMB * 1024 * 1024, event, source);
               current.found++;
             }
           });
-        } catch {
+        } catch (e) {
+          if (e.code === "EACCES") report("Could not read asset " + path12.basename(file) + ": " + message(e));
         }
+      };
+      try {
+        const sources = await generatedHistory.sources(w, nativeWorkspaces.aliases);
+        if (stoppedHere()) return;
+        for (const [root, owner] of chatSources) if (owner.worktreeId === w.id) chatSources.delete(root);
+        for (const source of sources) chatSources.set(source.root, { worktreeId: w.id, source });
+        for (const source of sources) {
+          await collectChatAssets(source, settings, stoppedHere, (file) => ingest(file, void 0, source));
+          for (const a of index.records.values()) if (a.worktreeId === w.id && a.sourceRoot === source.root) {
+            try {
+              await stat5(await safePath(a.originalPath ? w.root : source.root, a.absolutePath));
+            } catch {
+              index.missing(a.id);
+            }
+          }
+        }
+      } catch (e) {
+        for (const [root, owner] of chatSources) if (owner.worktreeId === w.id) chatSources.delete(root);
+        report("Chat output discovery unavailable: " + message(e));
+      }
+      for (const candidate of await generatedHistory.assets(w, nativeWorkspaces.aliases)) {
+        if (stoppedHere()) return;
+        await ingest(candidate.file, candidate.event);
       }
     })().then(() => {
       current.status = "complete";
@@ -6267,7 +6504,7 @@ async function activate(orca, options) {
   const pending = /* @__PURE__ */ new Map();
   function schedule(w, file, origin, event) {
     const root = w.root;
-    if (stopped || !root || !supported(file, settings.extensions) || excluded(path9.relative(root, file), settings.excludedFolders)) return;
+    if (stopped || !root || !supported(file, settings.extensions) || excluded(path12.relative(root, file), settings.excludedFolders)) return;
     const k = w.id + ":" + file, prev = pending.get(k);
     if (prev) clearTimeout(prev.timer);
     const candidate = { w, file, origin: prev?.origin === "confirmed-agent" ? prev.origin : origin, event: event ?? prev?.event, timer: setTimeout(() => {
@@ -6288,11 +6525,12 @@ async function activate(orca, options) {
   }
   const watcher = new FileWatcher((w, file, removed) => {
     const known = index.records.get(index.id(w, file));
+    if (known && path12.resolve(file) !== known.absolutePath) return;
     if (removed) {
       if (known) index.missing(known.id);
       return;
     }
-    if (known?.origin === "confirmed-agent") schedule(w, file, known.origin);
+    if (known && isGeneratedAsset(known)) schedule(w, file, known.origin);
   }, report, () => settings.excludedFolders);
   async function refreshNativeWorkspaces() {
     if (stopped) return;
@@ -6420,7 +6658,7 @@ async function activate(orca, options) {
   async function fingerprint(w, file) {
     try {
       const { bytes } = await readAsset(w.root, file, settings.maxSizeMB * 1024 * 1024);
-      return createHash4("sha256").update(bytes).digest("hex");
+      return createHash6("sha256").update(bytes).digest("hex");
     } catch {
       return null;
     }
@@ -6483,10 +6721,10 @@ async function activate(orca, options) {
     if (!a) throw invalid2("Unknown asset");
     const w = workspaces.find((w2) => w2.id === a.worktreeId);
     if (!w?.root || w.reason) throw new Error("Asset worktree is unavailable");
-    if (!isGeneratedAsset(a) || !within(w.root, a.absolutePath)) throw invalid2("Asset is not a generated file inside its worktree");
-    const root = w.root;
+    const source = a.location === "chat" && !a.originalPath ? sourceFor(a) : void 0, root = a.location === "chat" && !a.originalPath ? source?.root : w.root;
+    if (!isGeneratedAsset(a) || !root || !within(root, a.absolutePath)) throw invalid2("Asset is not owned by this worktree or its chats");
     await safePath(root, a.absolutePath);
-    return { a, w, root };
+    return { a, w, root, source };
   }
   function handle(name, handler) {
     subscriptions.push(orca.panels.handle(name, async (input) => JSON.parse(JSON.stringify(await handler(input)))));
@@ -6499,7 +6737,7 @@ async function activate(orca, options) {
   handle("library.list", async (q) => {
     await initialized;
     if (!q || !["project", "worktree"].includes(q.scope) || !["generated", "discovered"].includes(q.mode)) throw invalid2("Invalid gallery query");
-    const assets = selectAssets(index.records.values(), active, { ...q, scope: "worktree", mode: "generated", includeUnavailable: settings.includeUnavailable }), offset = Math.max(0, Math.floor(q.offset ?? 0)), limit = Math.min(100, Math.max(1, Math.floor(q.limit ?? 80)));
+    const assets = selectAssets([...index.records.values()].filter((a) => a.location !== "chat" || a.originalPath || sourceFor(a)), active, { ...q, scope: "worktree", mode: "generated", includeUnavailable: settings.includeUnavailable }), offset = Math.max(0, Math.floor(q.offset ?? 0)), limit = Math.min(100, Math.max(1, Math.floor(q.limit ?? 80)));
     return { assets: assets.slice(offset, offset + limit), total: assets.length, revision: index.revision };
   });
   handle("library.detail", async ({ id }) => {
@@ -6545,13 +6783,13 @@ async function activate(orca, options) {
   handle("library.preview", async ({ id, offset, contentHash }) => {
     if (!Number.isInteger(offset) || offset < 0 || offset % CHUNK_SIZE !== 0) throw invalid2("Invalid preview offset");
     try {
-      const { a, root, w } = await record(id);
+      const { a, root, w, source } = await record(id);
       if (contentHash && contentHash !== a.contentHash) throw new Error("Asset changed while loading. Retry the preview.");
       let original = originals.get(id);
       if (!original || original.hash !== a.contentHash || Date.now() - original.at > 3e4) {
         const data = await readAsset(root, a.absolutePath, Math.min(16, settings.maxSizeMB) * 1024 * 1024);
-        if (createHash4("sha256").update(data.bytes).digest("hex") !== a.contentHash) {
-          await queue(() => index.ingest(w, a.absolutePath, a.origin, settings.maxSizeMB * 1024 * 1024, void 0));
+        if (createHash6("sha256").update(data.bytes).digest("hex") !== a.contentHash) {
+          await queue(() => index.ingest(w, a.absolutePath, a.origin, settings.maxSizeMB * 1024 * 1024, void 0, source));
           throw new Error("Asset changed while loading. Retry the preview.");
         }
         const isDocument = ["text/markdown", "text/html"].includes(a.mimeType), isVideo = a.mimeType.startsWith("video/"), bytes = isDocument ? Buffer.from(a.mimeType === "text/html" ? validateHtml(data.bytes) : validateMarkdown(data.bytes)) : isVideo ? data.bytes : validatedInput(data.bytes);
@@ -6591,8 +6829,8 @@ async function activate(orca, options) {
         if (stopped || active?.id !== workspaceId) return;
         if (a.worktreeId !== workspaceId || !isGeneratedAsset(a)) continue;
         try {
-          const { w, root } = await record(a.id), s = await stat5(await safePath(root, a.absolutePath));
-          if (a.status === "missing" || a.updatedAt !== s.mtimeMs || a.sizeBytes !== s.size) await queue(() => index.ingest(w, a.absolutePath, a.origin, settings.maxSizeMB * 1024 * 1024, void 0));
+          const { w, root, source } = await record(a.id), s = await stat5(await safePath(root, a.absolutePath));
+          if (a.status === "missing" || a.updatedAt !== s.mtimeMs || a.sizeBytes !== s.size) await queue(() => index.ingest(w, a.absolutePath, a.origin, settings.maxSizeMB * 1024 * 1024, void 0, source));
         } catch (e) {
           index.missing(a.id);
           report(e);
@@ -6610,13 +6848,37 @@ async function activate(orca, options) {
     const { a, w } = await record(id);
     if (action === "open") {
       try {
-        await openOriginal(a, w, (input) => orca.host.call("editor.open", input), options?.openBrowser);
-        return { ok: true };
+        let preferred;
+        if (a.location === "chat" && !a.originalPath) {
+          for (const candidate of index.records.values()) {
+            if (candidate.id === a.id || candidate.worktreeId !== w.id || candidate.projectId !== w.libraryProjectId || candidate.location === "chat" || candidate.originalPath || candidate.origin !== "confirmed-agent" || candidate.relativePath !== a.relativePath) continue;
+            try {
+              const current = await extract(w.root, candidate.absolutePath, settings.maxSizeMB * 1024 * 1024);
+              const source = await extract(a.sourceRoot, a.absolutePath, settings.maxSizeMB * 1024 * 1024);
+              if (current.contentHash === source.contentHash || candidate.conversationId === a.conversationId) {
+                preferred = candidate;
+                break;
+              }
+            } catch {
+            }
+          }
+        }
+        const result = await openOriginal(a, w, (input) => orca.host.call("editor.open", input), options?.openBrowser, async (asset, workspace) => {
+          const root = asset.location === "chat" ? asset.sourceRoot : workspace.root, source = asset.location === "chat" ? sourceFor(asset) : void 0;
+          if (asset.location === "chat" && !source) throw invalid2("Chat source ownership is unavailable");
+          const metadata = await extract(root, asset.absolutePath, settings.maxSizeMB * 1024 * 1024);
+          const file = await editorCopies.materialize(workspace, { ...asset, contentHash: metadata.contentHash }, settings.maxSizeMB * 1024 * 1024);
+          await queue(() => index.ingest(workspace, file, asset.origin, settings.maxSizeMB * 1024 * 1024, void 0, source, { path: asset.absolutePath, contentHash: metadata.contentHash, updatedAt: metadata.mtime, sizeBytes: metadata.size }));
+          originals.delete(asset.id);
+          return file;
+        }, preferred);
+        return { ok: true, ...result?.workingCopy ? { message: "Opened a working copy. Edits affect the copy; its original stays unchanged." } : {} };
       } catch (e) {
         return { ok: false, message: "Could not open " + a.filename + " in Orca: " + message(e) };
       }
     }
     if (action === "explorer") {
+      if (a.location === "chat" && !a.originalPath) return { ok: false, message: "This historical file is stored with its chat. Copy its absolute path, or use Open to prepare an editor copy when needed." };
       await orca.host.call("workspace.open", { workspaceId: w.id });
       await orca.host.call("commands.run", { action: "sidebar.explorer.toggle" });
       return { ok: true, message: "Opened native Explorer. Locate " + a.relativePath + "." };

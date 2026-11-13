@@ -2,20 +2,20 @@
 
 **Discover what your agents generate.**
 
-Assets Library automatically discovers images, videos, SVGs, Markdown and HTML generated inside the active worktree during agent conversations in [Orca](https://onorca.dev). New outputs appear as they are created, and switching worktrees recovers previously indexed files and outputs identified by recorded chat file-change evidence. You can find generated files without hunting through directories or asking an agent to register them.
+Assets Library automatically discovers images, videos, SVGs, Markdown and HTML generated in the active worktree and its associated chat folders during agent conversations in [Orca](https://onorca.dev). New outputs appear as they are created, and switching worktrees recovers previously indexed files and outputs identified by recorded chat file-change evidence. You can find generated files without hunting through directories or asking an agent to register them.
 
 [![Orca 1.4.257+](https://img.shields.io/badge/Orca-1.4.257%2B-287d6c)](https://onorca.dev) [![Light and Dark](https://img.shields.io/badge/appearance-light%20%26%20dark-242424)](#screenshots) [![MIT license](https://img.shields.io/badge/license-MIT-287d6c)](LICENSE)
 
 ![Assets Library automatically discovers generated images, videos, SVGs, Markdown and HTML](assets/cover.png)
 
-Version **1.0.0**. See [CHANGELOG.md](CHANGELOG.md) and [RELEASE.md](RELEASE.md).
+Version **1.0.1**. See [CHANGELOG.md](CHANGELOG.md) and [RELEASE.md](RELEASE.md).
 
 ## Discover generated assets automatically
 
-Library shows only generated outputs physically stored inside the active worktree. Ordinary repository images, videos and documents are never scanned or shown. Files need explicit agent/tool write, output or recorded file-change evidence. Orca’s separate chat-output folders are excluded.
+Library discovers generated worktree outputs and supported resources in Orca’s dedicated output folders for chats owned by that worktree. Ordinary repository images, videos and documents are never scanned or shown. Worktree files require explicit agent/tool write, output or recorded file-change evidence. Chat-folder records retain session ownership separately from per-file write evidence.
 
 - **During agent work:** structured write/output evidence identifies worktree outputs; filesystem watchers refresh files already attributed to agents.
-- **When a worktree opens:** known records are refreshed, and recorded chat file-change paths recover supported outputs from earlier conversations.
+- **When a worktree opens:** known records are refreshed, and recorded chat file-change paths recover worktree outputs and session ownership identifies dedicated output folders from earlier conversations.
 - **While the sidebar is closed:** the enabled worker keeps discovering outputs and persists their paths and provenance privately.
 - **When you switch worktrees:** the results follow the newly active worktree. Assets from unrelated worktrees stay out of the visible collection.
 
@@ -25,19 +25,19 @@ Supported files are **PNG, JPEG, WebP, GIF, SVG, AVIF, MP4, WebM, Markdown and H
 
 ## How discovery identifies generated files
 
-Assets Library uses structured write/output evidence where Orca provides it. A version-dependent, read-only worktree adapter recovers explicit file-change paths from Orca’s local journal, including previous chats, without retrieving prompts, messages or patch content. The optional workspace adapter uses Orca’s documented CLI inventory to map native session/workspace identities and activity; it never scans chat folders. Filesystem watchers refresh attributed files. Agent activity timing alone never adds repository files.
+Assets Library uses structured write/output evidence where Orca provides it. A version-dependent, read-only worktree adapter recovers explicit file-change paths from Orca’s local journal, including previous chats, without retrieving prompts, messages or patch content. The optional workspace adapter uses Orca’s documented CLI inventory to map native workspace identities and activity. The journal adapter also resolves session-owned chat folders and checks supported resources there every five seconds. Filesystem watchers refresh attributed worktree files. Agent activity timing alone never adds repository files.
 
-Only confirmed worktree outputs appear. Ordinary, timing-inferred and chat-folder records saved by earlier discovery versions are retired from the private index on startup. Original files are never moved or deleted.
+Worktree outputs require confirmed file evidence. Chat-folder outputs require a recorded local session-to-worktree owner and a safe dedicated session directory; this confirms chat association rather than an individual tool write. Ordinary and timing-inferred records remain excluded. Chat originals are discovered in place for history; discovery never creates working copies. Open prefers an identified generated file inside the worktree and uses a canonical worktree-relative editor path. When direct opening is unavailable or fails, a working copy is prepared under .orca/assets-library/opened/ and opened in the editor. The original is unchanged. Existing working copies retain their edits and are clearly identified in Info.
 
-Historical repository files without recorded evidence cannot universally be identified as generated and remain excluded. Files saved outside the worktree, including native chat-output folders, do not appear. Orca does not expose a reliable selected-chat filter or exact creation-message navigation API. See [COMPATIBILITY.md](COMPATIBILITY.md) and the [discovery integration matrix](docs/INTEGRATION.md).
+Historical repository files without recorded evidence cannot universally be identified as generated and remain excluded. Files outside the worktree and its owned chat-output folders do not appear. Orca does not expose a reliable selected-chat filter or exact creation-message navigation API. See [COMPATIBILITY.md](COMPATIBILITY.md) and the [discovery integration matrix](docs/INTEGRATION.md).
 
 ## Recheck generated outputs on demand
 
-Click the refresh icon to the right of **N assets** to recheck recorded worktree file-change paths and already attributed files. During automatic or manual discovery, **Refreshing** replaces the count and a loading indicator replaces the refresh icon. Results arrive progressively; the count and button return when discovery finishes. Refresh never inventories ordinary repository assets or chat-output folders. There is no generated/all-assets dropdown or broad filesystem discovery action.
+Click the refresh icon to the right of **N assets** to recheck recorded worktree file-change paths and already attributed files. During automatic or manual discovery, **Refreshing** replaces the count and a loading indicator replaces the refresh icon. Results arrive progressively; the count and button return when discovery finishes. Refresh checks owned chat-output folders and never inventories ordinary repository assets or unrelated chats. There is no generated/all-assets dropdown or broad filesystem discovery action.
 
 The three-dot discovery settings menu controls excluded folders, supported extensions and file-size limits. No configuration is needed to begin collecting outputs. Generated assets are not discarded solely because Git ignores them. The default file-size limit is 32 MB, configurable from 1–64 MB, including for videos.
 
-Unavailable files are hidden by default. Enable **Include unavailable files** in discovery settings to show previously collected assets whose originals are missing. This preference persists across restarts; hidden records retain their metadata.
+Unavailable files are hidden by default. Enable **Include unavailable files** in discovery settings to show previously collected assets whose displayed files are missing. This preference persists across restarts; hidden records retain their metadata.
 
 Each canonical full file path, including its filename, appears once. Repeated events, refreshes and old duplicate index entries preserve one record and its strongest provenance. Identical contents at different paths remain separate assets.
 
@@ -45,7 +45,7 @@ Each canonical full file path, including its filename, appears once. Repeated ev
 
 Use filename/path search, type filters and sorting to locate a result. Cards and List show the same generated outputs, and the layout preference persists. SVG and GIF belong to Images; MP4 and WebM belong to Videos.
 
-Click a thumbnail, a list row or **Open** to open the original image, SVG, Markdown or video in Orca’s editor using a canonical worktree-relative path. HTML opens in Orca’s browser through its documented CLI local-file route. **Info** shows paths, metadata and previews inside the sidebar. Markdown has a compact, rendered, scrollable excerpt. HTML appears under **Other**, labeled **HTML**, with a compact source excerpt; scripts and linked resources never run inside Library. Info opens only when selected. No working copies or symlinks are created.
+Click a thumbnail, a list row or **Open** to open images, SVGs, Markdown and videos in Orca’s editor using a canonical worktree-relative path. Worktree HTML opens in Orca’s browser. Chat history prefers a worktree file only when it has explicit generated-file evidence, the same relative path, and matching content or originating session. Ordinary files are never matched by filename alone. If direct opening is unavailable or rejected, Library creates a working copy and opens it in the editor. **Info** then shows the copy’s actual path, its original path and a clear working-copy notice. Previews and references follow the displayed file. Markdown has a compact, rendered, scrollable excerpt. HTML appears under **Other**, labeled **HTML**, with an inert source excerpt. Existing copies remain available after source deletion, and edits are preserved across refreshes and restarts. New chat outputs remain at their original locations until Open needs a copy. No symlinks are created.
 
 Arrow keys and Home/End navigate results, Tab reaches Open/Info, Escape returns from details or clears the search query, and Cmd/Ctrl+F focuses the always-visible search field. See [docs/USAGE.md](docs/USAGE.md) for discovery behavior, file actions and persistence.
 
@@ -58,7 +58,7 @@ Requires **Orca desktop 1.4.257 or newer** and its compatible CLI. No separate N
 1. Open **Settings → Plugins → Add plugin → From a Git URL…**.
 2. Enter the versioned repository URL:
 
-       https://github.com/faisalmuhammad/orca-assets-library#v1.0.0
+       https://github.com/faisalmuhammad/orca-assets-library#v1.0.1
 
 3. Review the trusted worker, workspace discovery and navigation, agent events, and plugin-owned storage access.
 4. Open **Assets Library** from the book icon in the right sidebar. Automatic discovery runs while the plugin is enabled, including when the panel is closed.
@@ -83,13 +83,13 @@ These screenshots render the compiled panel with controlled sample assets and an
 | --- | --- |
 | Trusted Node worker | Discover files within approved roots, check file headers, and call Orca’s CLI |
 | workspace:read | Identify the active worktree and map native session identities |
-| workspace:write | Open discovered repository files and native Explorer |
+| workspace:write | Open worktree files and native Explorer; trusted worker prepares fallback working copies when opening requires one |
 | agent:read | Receive agent lifecycle and structured tool evidence |
 | storage:own | Persist discovery evidence, the asset index, preferences and bounded thumbnails |
 
-Discovery works offline. Files, thumbnails and metadata stay on your machine; nothing is uploaded and no conversation text is indexed. Only identified worktree roots are inspected for assets. Escaping symlinks, dependency folders, caches and oversized or unsupported files are excluded.
+Discovery works offline. Files, thumbnails and metadata stay on your machine; nothing is uploaded and no conversation text is indexed. Only identified worktree roots and session-owned chat-output folders are inspected for assets. Fallback working copies are the only asset files written into the worktree; the metadata index remains private. Escaping symlinks, dependency folders, caches and oversized or unsupported files are excluded.
 
-The browser renders previews through private Blob URLs and creates small cached thumbnails on demand. SVG previews remove executable and external content. Markdown uses safe DOM nodes, omits raw HTML and does not load linked resources. Discovery and Info never execute files. Opening HTML explicitly renders the original in Orca’s browser. The private index is never written into your repository.
+The browser renders previews through private Blob URLs and creates small cached thumbnails on demand. SVG previews remove executable and external content. Markdown uses safe DOM nodes, omits raw HTML and does not load linked resources. Discovery and Info never execute files. Opening original worktree HTML explicitly renders it in Orca’s browser; copied chat HTML opens as source in the editor. The private index is never written into your repository.
 
 <details>
 <summary>Development and release</summary>

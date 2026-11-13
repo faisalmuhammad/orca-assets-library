@@ -1,11 +1,70 @@
 import {mp4Fixture,webmFixture} from './fixtures/video';
 import {Persistence} from '../worker/persistence';
 import type {AssetRecord} from '../shared/types';
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,rm,realpath} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import sharp from 'sharp';import activate,{deactivate} from '../worker/index';import type {OrcaWorkerApi} from 'orca/worker';import {NativeWorkspaceAdapter} from '../worker/native-workspace-adapter';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,writeFile,readFile,rm,realpath} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import sharp from 'sharp';import activate,{deactivate} from '../worker/index';import type {OrcaWorkerApi} from 'orca/worker';import {NativeWorkspaceAdapter} from '../worker/native-workspace-adapter';
 import {NativeWorktreeAdapter} from '../worker/native-worktree-adapter';
+import {chatDirectory} from '../shared/chat-source';
 const sleep=(n:number)=>new Promise(r=>setTimeout(r,n));
-async function until(check:()=>Promise<boolean>){for(let i=0;i<40;i++){if(await check())return;await sleep(100);}throw new Error('Worker did not settle within four seconds');}
+async function until(check:()=>Promise<boolean>,attempts=40){for(let i=0;i<attempts;i++){if(await check())return;await sleep(100);}throw new Error('Worker did not settle within '+attempts*100+' ms');}
 function json(value:unknown){assert.deepEqual(value,JSON.parse(JSON.stringify(value)),'Bridge values must be strict JSON');return value;}
+test('worktree and chat originals discover without copying; Open falls back, preserves edits and follows ownership',async()=>{
+  const base=await realpath(await mkdtemp(path.join(os.tmpdir(),'library-chat-worker-')));
+  const {mkdir}=await import('node:fs/promises');
+  const spaces=await Promise.all(['one','two'].map(async id=>{const root=path.join(base,id);await mkdir(root);return{id,name:id,path:root,root,kind:'folder' as const,hostId:'local',branch:null};}));
+  const sourceRoot=chatDirectory(base,'codex_one'),unrelatedRoot=chatDirectory(base,'codex_unrelated');
+  await mkdir(sourceRoot,{recursive:true});await mkdir(unrelatedRoot);
+  let activeId='one';const handlers=new Map<string,(input?:unknown)=>Promise<any>>(),events=new Map<string,(e:unknown)=>unknown>(),storage=new Map<string,unknown>(),opened:string[]=[];
+  const historyRows:unknown[]=[];const owners=[{session_id:'codex_one',workspace_id:'one',agent:'codex'},{session_id:'codex_two',workspace_id:'two',agent:'codex'},{session_id:'codex_unrelated',workspace_id:'unrelated',agent:'codex'}];
+  const host={panels:{handle:(name:string,handler:(input:unknown)=>unknown)=>{handlers.set(name,async input=>json(await handler(input??{})));return{dispose(){}};},post:()=>{}},hooks:{on:()=>({dispose(){}})},events:{on:(name:string,handler:()=>unknown)=>{events.set(name,handler);return{dispose(){}};}},storage:{get:async(k:string)=>storage.get(k)??null,set:async(k:string,v:unknown)=>{storage.set(k,structuredClone(v));},keys:async()=>[...storage.keys()],delete:async(k:string)=>{storage.delete(k);}},host:{has:()=>true,call:async(name:string,input?:unknown)=>{if(name==='editor.open'){opened.push((input as {path:string}).path);return{opened:true};}if(name==='workspace.list')return{workspaces:spaces,truncated:false};if(name==='workspace.readContext')return{workspaceId:activeId,displayName:activeId,branch:'',terminals:[]};if(name==='agents.list')return{agents:[]};assert.fail('Unexpected host action');}},log:()=>{}} as unknown as OrcaWorkerApi;
+  const start=()=>activate(host,{generatedHistory:new NativeWorktreeAdapter(async(_db,sql)=>sql.startsWith('SELECT session_id')?owners:historyRows,path.join(base,'journal.db')),nativeWorkspaces:new NativeWorkspaceAdapter(async()=>({ok:true,result:{worktrees:[]}})),openBrowser:async()=>assert.fail('Chat assets must open in the editor')});
+  const list=()=>handlers.get('library.list')!({scope:'worktree',mode:'generated'});
+  const refresh=async()=>{await handlers.get('library.refresh')!();await until(async()=>!(await handlers.get('library.context')!()).refreshing);};
+  try{
+    await writeFile(path.join(sourceRoot,'demo.mp4'),mp4Fixture());await writeFile(path.join(sourceRoot,'review.md'),'# Review\nGenerated document');
+    await writeFile(path.join(unrelatedRoot,'private.md'),'Other workspace');await writeFile(path.join(spaces[0].root,'review.md'),'Ordinary repo document with the same filename');
+    await start();await until(async()=> (await list()).total===2);
+    const video=(await list()).assets.find((a:AssetRecord)=>a.filename==='demo.mp4');assert.ok(video);assert.equal(video.location,'chat');assert.equal(video.origin,'chat-output');assert.equal(video.conversationId,'codex_one');assert.equal(video.worktreeId,'one');
+    assert.equal(video.absolutePath,path.join(sourceRoot,'demo.mp4'));assert.equal(video.originalPath,undefined);
+    assert.deepEqual(Buffer.from((await handlers.get('library.preview')!({id:video.id,offset:0})).data,'base64'),mp4Fixture());
+    const note=(await list()).assets.find((a:AssetRecord)=>a.filename==='review.md');assert.match((await handlers.get('library.documentPreview')!({id:note.id})).text,/Generated document/);
+    const copyPath=path.join(spaces[0].root,'.orca/assets-library/opened/codex_one/demo.mp4');
+    await assert.rejects(readFile(copyPath),{code:'ENOENT'},'Discovery never copies chat files');
+    assert.equal((await handlers.get('library.action')!({id:video.id,action:'open'})).ok,true);assert.deepEqual(opened,['.orca/assets-library/opened/codex_one/demo.mp4']);
+    assert.deepEqual(await readFile(copyPath),mp4Fixture());assert.equal((await list()).assets.find((a:AssetRecord)=>a.id===video.id).absolutePath,copyPath);
+    await refresh();assert.equal((await list()).total,2,'Fallback retains one entry for the original/copy identity');
+    await writeFile(path.join(sourceRoot,'review.md'),'# Review\nUpdated generated document');await writeFile(path.join(sourceRoot,'new.md'),'# Another output');await refresh();
+    assert.equal((await list()).total,3);assert.equal((await list()).assets.find((a:AssetRecord)=>a.id===note.id).version,2);
+    assert.match((await handlers.get('library.documentPreview')!({id:note.id})).text,/Updated generated document/);
+    await handlers.get('library.action')!({id:note.id,action:'open'});
+    const noteCopy=(await list()).assets.find((a:AssetRecord)=>a.id===note.id);assert.ok(noteCopy.originalPath);
+    assert.equal(await readFile(path.join(spaces[0].root,'review.md'),'utf8'),'Ordinary repo document with the same filename','No filename-only mapping to ordinary files');
+    await writeFile(noteCopy.absolutePath,'# My edits');await writeFile(path.join(sourceRoot,'review.md'),'# Later agent update');await refresh();
+    assert.equal((await handlers.get('library.documentPreview')!({id:note.id})).text,'# My edits','Info reads the edited fallback copy');
+    assert.equal(await readFile(path.join(sourceRoot,'review.md'),'utf8'),'# Later agent update','Original remains untouched');
+    activeId='two';events.get('workspace.changed')!({context:null});await until(async()=> (await handlers.get('library.context')!()).active?.id==='two');assert.equal((await list()).total,0);
+    activeId='one';events.get('workspace.changed')!({context:null});await until(async()=> (await list()).total===3);
+    await deactivate();await start();await until(async()=> (await list()).total===3);
+    assert.equal(await readFile(noteCopy.absolutePath,'utf8'),'# My edits','Restart preserves existing copies without resyncing them');
+    await rm(path.join(sourceRoot,'demo.mp4'));await refresh();assert.equal((await list()).total,3,'Source deletion retains an available fallback copy');
+    await rm(copyPath);await refresh();assert.equal((await list()).total,2);
+    const settings=(await handlers.get('library.context')!()).settings;await handlers.get('library.settings')!({...settings,includeUnavailable:true});await refresh();
+    assert.equal((await list()).total,3);assert.equal((await list()).assets.find((a:AssetRecord)=>a.id===video.id).status,'missing');
+    owners.splice(0,1);await writeFile(path.join(sourceRoot,'unowned-new.md'),'# No owner');await refresh();assert.equal((await list()).total,2,'Worktree copies persist; unowned chat originals cannot appear');
+    owners.unshift({session_id:'codex_one',workspace_id:'one',agent:'codex'});
+    await writeFile(path.join(sourceRoot,'live-auto.md'),'# Automatic output');
+    await until(async()=> (await list()).assets.some((a:AssetRecord)=>a.filename==='live-auto.md'),80);
+    const live=(await list()).assets.find((a:AssetRecord)=>a.filename==='live-auto.md');
+    assert.equal(live.absolutePath,path.join(sourceRoot,'live-auto.md'),'Background collection displays the original without Refresh or Open');
+    await assert.rejects(readFile(path.join(spaces[0].root,'.orca/assets-library/opened/codex_one/live-auto.md')),{code:'ENOENT'});
+    await writeFile(path.join(sourceRoot,'paired.md'),'# Paired output');await writeFile(path.join(spaces[0].root,'paired.md'),'# Paired output');
+    historyRows.push({session_id:'codex_one',workspace_id:'one',agent:'codex',path:path.join(spaces[0].root,'paired.md')});await refresh();
+    const paired=(await list()).assets.find((a:AssetRecord)=>a.filename==='paired.md'&&a.location==='chat');
+    assert.equal((await handlers.get('library.action')!({id:paired.id,action:'open'})).ok,true);assert.equal(opened.at(-1),'paired.md','Chat history opens its confirmed worktree file first');
+    await writeFile(path.join(spaces[0].root,'paired.md'),'# Edited worktree output');await refresh();
+    await handlers.get('library.action')!({id:paired.id,action:'open'});assert.equal(opened.at(-1),'paired.md','Same-chat worktree evidence retains direct opening after edits');
+    await assert.rejects(readFile(path.join(spaces[0].root,'.orca/assets-library/opened/codex_one/paired.md')),{code:'ENOENT'});
+  }finally{await deactivate();await rm(base,{recursive:true,force:true});}
+});
 test('real worker collects write evidence, hides existing assets, reconciles deletes and persists across reload',async()=>{
   const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'library-worker-'))),storage=new Map<string,unknown>();let active=true,workingSince:number|undefined;const handlers=new Map<string,(input?:unknown)=>Promise<unknown>>(),hooks=new Map<string,(event:unknown,next?:(e:unknown)=>unknown)=>unknown>(),events=new Map<string,(e:unknown)=>unknown>(),actions:unknown[]=[];
   const host={api:{major:1,minor:4},panels:{handle:(name:string,handler:(input:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,async input=>{json(input??{});return json(await handler(input,{panel:{id:'test',surface:'panel',contributionId:'library'},signal:new AbortController().signal}));});return{dispose(){}};},post:(_name:string,input:unknown)=>json(input)},hooks:{on:(name:string,fn:()=>unknown)=>{hooks.set(name,fn);return{dispose(){}};}},events:{on:(name:string,fn:()=>unknown)=>{events.set(name,fn);return{dispose(){}};}},commands:{register:()=>({dispose(){}})},storage:{get:async(k:string)=>storage.get(k)??null,set:async(k:string,v:unknown)=>{json(v);storage.set(k,structuredClone(v));},keys:async()=>[...storage.keys()],delete:async(k:string)=>{storage.delete(k);}},host:{has:()=>true,call:async(name:string,input:unknown)=>{if(name==='workspace.list')return{workspaces:[{id:'one',kind:'folder',name:'Test',branch:null,path:root,hostId:'local'}],truncated:false};if(name==='workspace.readContext')return active?{displayName:'Test',branch:'',terminals:[{id:'t'}]}:null;if(name==='agents.list')return{agents:workingSince?[{terminalId:'t',agent:'codex',state:'working',stateStartedAt:workingSince}]:[]};actions.push({name,input});return{opened:true,ran:true};}},grantedCapabilities:[],log:()=>{}} as unknown as OrcaWorkerApi;

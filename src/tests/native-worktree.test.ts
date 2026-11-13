@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,realpath,rm } from 'node:fs/promises';
+import { mkdtemp,realpath,rm,mkdir,writeFile,symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { NativeWorktreeAdapter } from '../worker/native-worktree-adapter';
+import { chatDirectory } from '../shared/chat-source';
+import { collectChatAssets } from '../worker/chat-asset-discovery';
+import { DEFAULT_SETTINGS } from '../shared/constants';
+import { safePath } from '../worker/workspace-resolver';
 import type { Workspace } from '../shared/types';
 const execute=promisify(execFile),quote=(v:string)=>"'"+v.replace(/'/g,"''")+"'";
 const workspace=(root='/repo'):Workspace=>({id:"workspace'one",kind:'folder',name:'One',path:root,root,branch:null,hostId:'local'});
@@ -46,4 +50,24 @@ test('unavailable or oversized journal results fail instead of broadly scanning 
   const w=workspace();await assert.rejects(new NativeWorktreeAdapter(async()=>({})).assets(w,new Map()),/unavailable/);
   await assert.rejects(new NativeWorktreeAdapter(async()=>Array(5001).fill({})).assets(w,new Map()),/safe metadata limit/);
   await assert.rejects(new NativeWorktreeAdapter(async()=>{throw new Error('Schema unavailable');}).assets(w,new Map()),/Schema unavailable/);
+});
+test('chat discovery scans only session-owned folders and rejects dependencies and escaping symlinks',async()=>{
+  const base=await realpath(await mkdtemp(path.join(os.tmpdir(),'library-owned-chat-'))),w=workspace(path.join(base,'repo')),database=path.join(base,'journal.db');
+  const root=chatDirectory(base,'codex_one'),other=chatDirectory(base,'codex_other');
+  try{
+    await mkdir(root,{recursive:true});await mkdir(other);await mkdir(path.join(root,'nested'));await mkdir(path.join(root,'video-tools'));
+    await writeFile(path.join(root,'notes.md'),'# Generated notes');await writeFile(path.join(root,'nested','page.html'),'<!doctype html><html></html>');
+    await writeFile(path.join(root,'video-tools','README.md'),'Dependency');await writeFile(path.join(other,'secret.md'),'Other chat');
+    await symlink(path.join(other,'secret.md'),path.join(root,'escape.md'));
+    const rows=[{session_id:'codex_one',workspace_id:w.id,agent:'codex'},{session_id:'codex_other',workspace_id:'other',agent:'codex'}];
+    let sql='';const adapter=new NativeWorktreeAdapter(async(_db,query)=>{sql=query;return rows;},database);
+    const sources=await adapter.sources(w,new Map());assert.deepEqual(sources.map(s=>s.root),[root]);
+    assert.ok(!sql.includes('lastTurn')&&!sql.includes('prompt')&&!sql.includes('patch'));
+    const files:string[]=[];await collectChatAssets(sources[0],DEFAULT_SETTINGS,()=>false,async file=>{files.push(path.relative(root,file));});
+    assert.deepEqual(files.sort(),['nested/page.html','notes.md']);
+    await assert.rejects(safePath(root,'escape.md'),/Symlink/);
+    await rm(root,{recursive:true});await symlink(other,root);assert.deepEqual(await adapter.sources(w,new Map()),[]);
+    await assert.rejects(safePath(root,'secret.md'),/Chat directory changed/);
+    assert.deepEqual(await adapter.sources({...w,hostId:'ssh:remote'},new Map()),[]);
+  }finally{await rm(base,{recursive:true,force:true});}
 });

@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import type { ToolEvent, Workspace } from '../shared/types';
+import { lstat,realpath } from 'node:fs/promises';
+import type { ChatSource, ToolEvent, Workspace } from '../shared/types';
+import { chatDirectory } from '../shared/chat-source';
 import { defaultOrcaDataDirectory } from './native-workspace-adapter';
 import { within } from './workspace-resolver';
 const execute=promisify(execFile);
@@ -18,6 +20,29 @@ const read:JournalRead=async(database,sql)=>{
 // No database mutation, core imports, shell parsing or repository-wide file scan.
 export class NativeWorktreeAdapter {
   constructor(private reader:JournalRead=read,private database=path.join(defaultOrcaDataDirectory(),'agent-session-journal.db')){}
+  async sources(w:Workspace,aliases:Map<string,string>):Promise<ChatSource[]> {
+    if(!w.root||w.reason||(w.hostId!==null&&w.hostId!=='local'))return [];
+    const owners=[w.id,...[...aliases].filter(([,id])=>id===w.id).map(([alias])=>alias)];
+    const rows=await this.reader(this.database,
+      "SELECT session_id,json_extract(record_json,'$.location.workspaceId') AS workspace_id,json_extract(record_json,'$.provider') AS agent FROM agent_session_records WHERE json_extract(record_json,'$.schemaVersion')=2 AND json_extract(record_json,'$.location.executionHostId')='local' AND json_extract(record_json,'$.location.workspaceId') IN ("+owners.map(quote).join(',')+") LIMIT 501;");
+    if(!Array.isArray(rows)||rows.length>500)throw new Error('Chat ownership metadata is unavailable or exceeds its safe limit.');
+    const sources:ChatSource[]=[],dataDirectory=path.dirname(this.database),scratch=path.join(dataDirectory,'chat-scratch');
+    let canonicalScratch:string;
+    try{if(!(await lstat(scratch)).isDirectory())return [];canonicalScratch=await realpath(scratch);}catch{return [];}
+    for(const value of rows){
+      const r=object(value);if(!r||typeof r.workspace_id!=='string'||!owners.includes(r.workspace_id)||typeof r.session_id!=='string'||!/^[A-Za-z0-9_-]{1,200}$/.test(r.session_id))continue;
+      const root=chatDirectory(dataDirectory,r.session_id);
+      try{
+        if(!(await lstat(root)).isDirectory())continue;
+        const canonical=await realpath(root);if(path.dirname(canonical)!==canonicalScratch)continue;
+        sources.push({root:canonical,conversationId:r.session_id,orcaTabId:'structured-agent-session-'+r.session_id,agent:typeof r.agent==='string'?r.agent:undefined});
+      }catch(e){
+        if((e as NodeJS.ErrnoException).code==='ENOENT')sources.push({root:path.join(canonicalScratch,path.basename(root)),conversationId:r.session_id,orcaTabId:'structured-agent-session-'+r.session_id,agent:typeof r.agent==='string'?r.agent:undefined});
+        // Missing originals may retain metadata; symlinked directories never authorize files.
+      }
+    }
+    return sources;
+  }
   async assets(w:Workspace,aliases:Map<string,string>):Promise<HistoryCandidate[]> {
     if(!w.root||w.reason||(w.hostId!==null&&w.hostId!=='local'))return [];
     const owners=[w.id,...[...aliases].filter(([,id])=>id===w.id).map(([alias])=>alias)];

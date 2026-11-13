@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- Discover outputs from session-owned chat folders alongside generated worktree files, including earlier conversations.
+- Open identified worktree originals first and prepare an editor working copy only when direct opening is unavailable or fails.
+- Keep previews, asset references and displayed paths aligned with the editable file after a fallback open.
+- Identify working copies in Info and preserve originals and edited copies across refreshes and restarts.
+- Retain asset identities when using working copies so repeated opens do not duplicate entries.
+
 ## 1.0.0
 
 - Automatically discover agent-generated images, SVGs, videos, Markdown and HTML inside the current worktree, with live updates as files change.

@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {gzipSync,gunzipSync} from 'node:zlib';
 const SHARDS=64,FORMAT='asset-shard-v2';
 const bucket=(id:string)=>createHash('sha256').update(id).digest()[0]%SHARDS;
-const valid=(v:unknown):v is AssetRecord=>!!v&&typeof v==='object'&&!Array.isArray(v)&&typeof (v as AssetRecord).id==='string'&&typeof (v as AssetRecord).absolutePath==='string'&&typeof (v as AssetRecord).contentHash==='string'&&['confirmed-agent','inferred-agent','discovered'].includes((v as AssetRecord).origin);
+const valid=(v:unknown):v is AssetRecord=>!!v&&typeof v==='object'&&!Array.isArray(v)&&typeof (v as AssetRecord).id==='string'&&typeof (v as AssetRecord).absolutePath==='string'&&typeof (v as AssetRecord).contentHash==='string'&&['confirmed-agent','chat-output','inferred-agent','discovered'].includes((v as AssetRecord).origin);
 function unpack(v:unknown):AssetRecord[] {
   if(valid(v))return [v];
   if(v&&typeof v==='object'&&!Array.isArray(v)&&'format' in v&&v.format===FORMAT&&'data' in v&&typeof v.data==='string'){

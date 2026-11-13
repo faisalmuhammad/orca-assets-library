@@ -2,7 +2,7 @@
 
 Assets Library is an automatic discovery plugin for agent-generated images, videos, SVGs and Markdown. Release descriptions, documentation and artwork should lead with finding generated outputs; previews and file actions support that purpose.
 
-Release version: **1.0.0**, tag **v1.0.0**.
+Release version: **1.0.1**, tag **v1.0.1**.
 Plugin ID: **assets-library**.
 
 ## Repository contents
@@ -46,6 +46,6 @@ Enable Actions and add the **orca-plugin** topic when creating the repository. P
 
 The versioned install URL is:
 
-    https://github.com/faisalmuhammad/orca-assets-library#v1.0.0
+    https://github.com/faisalmuhammad/orca-assets-library#v1.0.1
 
 Repository creation, pushing, publication and catalog submission are separate from preparation. After publication, generate a catalog entry from the published commit with **orca plugin release-entry . --json**. Published tags must remain unchanged.

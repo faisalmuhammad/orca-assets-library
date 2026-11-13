@@ -242,6 +242,19 @@ test('failed original opening keeps the gallery and Info references the worktree
   await page.waitForTimeout(250);await page.locator('.asset-face').first().click();await expect(page.locator('#toast')).toContainText('Could not open');await expect(page.getByRole('region',{name:'Asset inspector'})).toHaveCount(0);await expect(page.locator('.asset-grid')).toBeVisible();await page.locator('.card-actions').first().getByRole('button',{name:/^Info for /}).click();await expect(page.getByRole('region',{name:'Asset inspector'})).toBeVisible();await expect(page.getByRole('button',{name:'Copy relative path',exact:true})).toBeVisible();
   await page.evaluate(()=>{Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async t=>{window.libraryCopiedText=t;}}});});await page.getByRole('button',{name:'Copy reference',exact:true}).click();expect(await page.evaluate(()=>window.libraryCopiedText)).toContain('output/composition-1.svg');
 });
+test('Info clearly identifies fallback copies and references the editable worktree file',async({page})=>{
+  await mock(page,{count:3});
+  await page.evaluate(()=>{const request=window.orca.plugin.request;window.orca.plugin.request=async(name,input)=>{const result=await request(name,input);if(name==='library.detail')return {...result,location:'chat',sourceRoot:'/chat/owned',conversationId:'codex_one',originalPath:'/chat/owned/image.svg',absolutePath:'/repo/.orca/assets-library/opened/codex_one/image.svg',relativePath:'.orca/assets-library/opened/codex_one/image.svg'};return result;};Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.libraryCopiedText=text}});});
+  await page.locator('.asset-face').first().focus();
+  await page.locator('.card-actions').first().getByRole('button',{name:/^Info for /}).click();
+  await page.evaluate(()=>window.libraryTestEmit('library.changed'));
+  await expect(page.getByText('Working copy · Edits affect this file; its original stays unchanged.',{exact:true})).toBeVisible();
+  await expect(page.getByText('/chat/owned/image.svg',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Copy reference',exact:true}).click();
+  expect(await page.evaluate(()=>window.libraryCopiedText)).toContain('.orca/assets-library/opened/codex_one/image.svg');
+  expect(await page.evaluate(()=>window.libraryCopiedText)).not.toContain('/chat/owned/');
+  await page.screenshot({path:'.orca/shots/fallback-copy-info.png'});
+});
 
 test('Info keeps keyboard focus through gallery resize and a live collection update',async({page})=>{
   await mock(page);const info=page.getByRole('button',{name:'Info for composition-2.svg',exact:true});await page.locator('[data-id="asset-2"] .asset-face').focus();await page.keyboard.press('Tab');await page.keyboard.press('Tab');await expect(info).toBeFocused();
